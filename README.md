@@ -51,6 +51,22 @@ python -m src.main \
   --diagram-mode route
 ```
 
+### Запуск через Docker (не пробовал)
+добавить .env c:
+```
+OPENROUTER_API_KEY=your_key_here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+команды для запуска:
+```
+docker compose up --build
+docker compose run --rm puml-gen \
+  python -m src.main --input input/synthetic_data.json --outdir output --diagram-mode service
+```
+
+
 ## Входные данные
 
 Сейчас проект работает с synthetic / intermediate IR в JSON-формате.

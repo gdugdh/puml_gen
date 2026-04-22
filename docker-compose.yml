@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  puml-gen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: puml-gen
+    env_file:
+      - .env
+    working_dir: /app
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./logs:/app/logs
+      - ./diagrams:/app/diagrams
+    command:
+      [
+        "python",
+        "-m",
+        "src.main",
+        "--input",
+        "input/synthetic_data.json",
+        "--outdir",
+        "output",
+        "--diagram-mode",
+        "route"
+      ]
