@@ -1,5 +1,5 @@
 PYTHON ?= python
-INPUT ?= synthetic_data/basic_fastapi_ideal_ir.json
+INPUT ?= input/synthetic_data.json
 OUTDIR ?= output
 DIAGRAM_MODE ?= route
 

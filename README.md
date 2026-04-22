@@ -46,7 +46,7 @@ make generate
 
 ```bash
 python -m src.main \
-  --input synthetic_data/basic_fastapi_ideal_ir.json \
+  --input input/synthetic_data.json \
   --outdir output \
   --diagram-mode route
 ```
