@@ -1,0 +1,29 @@
+@startuml
+title GET /api/order/{id} - Получение статуса заказа из DonateHub
+start
+
+:Params: **id**;
+note
+    Идентификатор заказа
+    в DonateHub
+end note
+
+#palegreen :GET /api/order/{id}\nwith path params: `id` = **id**;
+
+:**Response**;
+note: A2.R2
+
+if (**Response.Code** = HTTP 200?) then (+)    
+    :**Response.Body**;
+    stop
+endif
+
+if (**Response.Code** = HTTP 401?) then (+)
+    :HTTP 401 Unauthorized;
+    end
+endif
+
+:HTTP 400 BadRequest;
+end
+
+@enduml

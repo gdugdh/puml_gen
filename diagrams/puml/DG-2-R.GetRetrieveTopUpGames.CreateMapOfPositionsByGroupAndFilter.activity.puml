@@ -1,0 +1,31 @@
+@startuml
+title Формирование коллекции(map) игр с их позициями\nв формате DonateHub
+start
+
+:Params:
+**donateHubPositions**: list<DonateHubPositionDto>,
+**donateHubGames**: list<DonateHubGamesDto>;
+
+:**positionsGroupedByProductId** = group **donateHubPositions** by `product_id`\nAND filter where `category` = "Games" AND `price` > 0;
+note left
+    Создаем коллекцию игр
+    (map<key, list<DonateHubPositionDto>>),
+    со списком соответствующих позиций.
+    И отсекаем по категории (доп. проверка
+    из-за несквозных идентификаторов `product_id`).
+    А также `price` может быть null
+end note
+
+:**gameIds** = множество ключей set<key>\nиз **donateHubGames** по полю `id`;
+
+:**filteredPositionsGroupedByProductId** = filter **positionsGroupedByProductId**\nwhere `key` in `id` of **donateHubGames**;
+note left
+    Таким образом, останутся только позиции продуктов,
+    которые также присутствуют в списке **donateHubGames**
+end note
+
+:return: **filteredPositionsGroupedByProductId**;
+
+stop
+
+@enduml

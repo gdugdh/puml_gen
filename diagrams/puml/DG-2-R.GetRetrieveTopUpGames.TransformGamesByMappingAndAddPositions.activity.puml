@@ -1,0 +1,55 @@
+@startuml
+title Transform DonateHubGames to TopUpGames
+start
+
+:Params: 
+**donateHubGames** : list<DonateHubGamesDto>,
+**donateHubPositionsMap**  : map<key, list<DonateHubPositionDto>>,
+**wataRateRubToUsdt**,
+**terminalComissionInPercent**;
+
+:**topUpGames** = empty list<TopUpGameDto>;
+note
+    Создаем пустой список,
+    целевой объект возвращаемый в конце
+end note
+
+repeat :foreach **game** in **donateHubGames**;
+    
+    :**donateHubPositions** : list<DonateHubPositionDto> = 
+    найти значение из коллекции(map) **donateHubPositionsMap**
+    где `key` = **game.id**;
+    note 
+        Возвращает список позиций
+        в формате DonateHub
+        list<DonateHubPositionDto>
+    end note
+    
+    #palegreen :**topUpPositions** = transform (**donateHubPositions**)\nusing: **wataRateRubToUsdt**, **terminalComissionInPercent**;
+    note
+        A7, M1, C1
+        Маппинг позиций
+        list<DonateHubPostionDto> -> list<TopUpPositionDto>
+        И перерасчет цены, с учетом комиссии и рейта Wata
+    end note
+    
+    :**topUpGame** : TopUpGameDto = map (**game**);
+    note
+        M2
+        DonateHubGameDto -> TopUpGameDto
+    end note
+    
+    :**topUpGame.positions** = **topUpPositions**;
+    note
+        Добавляем список позиций
+        в поле `positions`
+    end note
+    
+    :add **topUpGame** into **topUpGames**;
+    
+repeat while;
+
+:return: **topUpGames**;
+stop
+
+@enduml

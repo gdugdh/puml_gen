@@ -1,0 +1,21 @@
+@startuml
+title Вычисление стоимости позиции с учетом комиссии и рейта Wata
+start
+
+:Params: **price**, **wataRateRubToUsdt**, **terminalComissionInPercent**;
+
+:**wataComissionRub** =\n**price** / **wataRateRubToUsdt** * (**terminalComissionInPercent** / 100);
+note
+    Комиссия которую
+    берет Wata (RUB)
+end note
+
+:**totalAmountRub** =\n**price** / **wataRateRubToUsdt** + **wataComissionRub**;
+note: Сумма оплаты (RUB)
+
+
+:return: **totalAmountRub**;
+
+stop
+
+@enduml

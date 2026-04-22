@@ -1,0 +1,41 @@
+@startuml
+title GET /api/h2h/terminals - Проверить доступность ЦТ для пользователя и получить терминал из WataApi
+start
+
+:Params: no params;
+
+:**Config** = application config;
+
+#palegreen :GET /api/h2h/terminals;
+
+:**Response**;
+note: A1.R2
+
+if (**Response.Code** = HTTP 200?) then (+)
+    if (**Response.Body.productType** not equals **Config.ProductType.AcquiringWithSteam**?) then (+)
+        :HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.InvalidProductType**;
+        note: DigitalGoods:TER_1001
+        end
+    endif
+
+    if (**Response.Body.rates** count not equals 1?) then (+)
+        :HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.InvalidTerminalRates**;
+        note: DigitalGoods:TER_1002
+        end
+    endif
+
+    :**Response.Body**;
+    note: ЦТ подключены для пользователя
+    stop
+endif
+
+if (**Response.Code** = HTTP 403?) then (+)
+    :HTTP 403 Unauthorized;
+    note: ЦТ **не подключены** для пользователя
+    end
+endif
+
+:HTTP 400 BadRequest;
+end
+
+@enduml

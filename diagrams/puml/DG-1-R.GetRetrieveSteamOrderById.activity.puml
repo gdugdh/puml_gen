@@ -1,0 +1,94 @@
+@startuml
+title GET /api/orders/steam/{id} - Получить статус созданного заказа
+start
+
+:Request;
+note: R1
+
+:**orderId** = Request.Params.id;
+note
+    Идентификатор заказа
+    в системе Пользователя
+end note
+
+:**Config** = application config;
+
+#palegreen :**terminal** = retrieve\nby GET /api/h2h/terminals\nfrom WataApi;
+note: A1
+
+:**terminalPublicId** = **terminal.publicId**;
+note: Сквозной идентификатор
+
+partition Найти заказ в БД {
+    if (find in DB `Orders` where ( `OrderId` = **orderId** AND `PublicId` = **terminalPublicId** )) then (-)
+        :HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.NotFound**;
+        note
+            Заказ не найден
+            ====
+            DigitalGoods:ORD_1001
+        end note
+        end
+    endif
+    
+    :**orderInDb**;
+    note: Найденный заказ    
+}
+
+#palegreen :**paymentLink** = retrieve\nby GET /api/h2h/links/{id}\nwith `id` = **orderInDb.PaymentLinkId**\nfrom WataApi;
+note left: A3
+
+if (**orderInDb.Status** not equals **Config.DigitalGoodsOrderStatuses.Success**?) then (+)
+    if (CurrentTime > **orderInDb.CreationTime** + **Config.OrderConsts.OrderLifetimeMinutes**) then (+)
+        partition Обновить статус заказа в БД {
+            :update in DB `Orders` where (`OrderId` = **orderInDb.OrderId**)\non ( `Status` = **Config.DigitalGoodsOrderStatuses.Expired** );
+        }
+        floating note
+            Истёк срок оплаты
+            заказа (1 час)
+        end note
+    endif
+    :Build response\nwith `orderId` = **orderInDb.OrderId**, `amount` = **orderInDb.Amount**, `status` = **orderInDb.Status**,\n**paymentLink.successRedirectUrl**, **paymentLink.failRedirectUrl**;
+    note: R2
+    
+    :HTTP 200 OK;
+    note: Успешный ответ. Истёк срок оплаты
+    end
+endif
+
+if (**orderInDb.DonateHubId** = 0 AND CurrentTime <= **orderInDb.CreationTime** + **Config.OrderConsts.OrderLifetimeMinutes**) then (+)
+    partition Обновить статус заказа в БД {
+        :update in DB `Orders` where (`OrderId` = **orderInDb.OrderId**)\non ( `Status` = **Config.DigitalGoodsOrderStatuses.Wait** );
+    }
+    floating note
+        Еще не создан заказ DonateHub
+        и не истек срок оплаты
+        заказа (1 час)
+    end note
+
+    :Build response\nwith `orderId` = **orderInDb.OrderId**, `amount` = **orderInDb.Amount**, `status` = **orderInDb.Status**,\n**paymentLink.successRedirectUrl**, **paymentLink.failRedirectUrl**;
+    note: R2
+    
+    :HTTP 200 OK;
+    note: Успешный ответ. Ожидание оплаты
+    end
+endif
+
+#palegreen :**orderInDonateHub** = retrieve\nby GET /api/order/{id}\nwith `id` = **orderInDb.DonateHubId**\nfrom DonateHub;
+note: A2
+
+:**orderInDonateHubStatus** = map **orderInDonateHub.status** to DigitalGoodsOrderStatuses;
+note: M1
+
+if (**orderInDonateHubStatus** not equals **orderInDb.Status**?) then (+)    
+    partition Обновить заказ в БД {
+        :update in DB `Orders` where (`OrderId` = **orderInDb.OrderId**)\non ( `Status` = **orderInDonateHubStatus** );
+    }
+endif
+
+:Build response\nwith `orderId` = **orderInDb.OrderId**, `amount` = **orderInDb.Amount**, `status` = **orderInDb.Status**,\n**paymentLink.successRedirectUrl**, **paymentLink.failRedirectUrl**;
+note: R2
+
+:HTTP 200 OK;
+end
+
+@enduml

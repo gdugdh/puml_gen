@@ -1,0 +1,39 @@
+@startuml
+title Формирование TopUpPositions
+start
+
+:Params:
+**donateHubPositions** : list<DonateHubPositionDto>,
+**wataRateRubToUsdt**,
+**terminalComissionInPercent**;
+
+:**topUpPositions** = empty list<TopUpPositionDto>;
+note
+    Создаем пустой список,
+    целевой объект возвращаемый в конце
+end note
+
+repeat :foreach **position** in **donateHubPositions**;
+    #palegreen :**totalAmountRub** = calculate(**position.price**, **wataRateRubToUsdt**, **terminalComissionInPercent**);
+    note: C1
+    
+    :**topUpPosition** : TopUpPositionDto = map (**position**);
+    note
+        M1
+        DonateHubPositionDto -> TopUpPositionDto
+    end note
+    
+    :**topUpPosition.price** = **totalAmountRub**;
+    note
+        Заменяем цену с учетом комиссии
+        в поле `price`
+    end note
+    
+    :add **topUpPosition** into **topUpPositions**;
+repeat while;
+
+:return: **topUpPositions**;
+
+stop
+
+@enduml

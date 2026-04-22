@@ -1,0 +1,44 @@
+@startuml
+title GET /api/h2h/links - Создать ссылку на оплату в WataApi
+start
+
+:Params: **amount**, **goodPrice**, **description**, **orderId**, **successRedirectUrl**, **failRedirectUrl**;
+
+:**Config** = application config;
+
+:**currency** = **Config.Currency.RUB**;
+note: Currency.RUB = 1
+
+:**expirationDateTime** = CurrentTime + **Config.OrderConsts.OrderLifetimeMinutes**;
+note
+    Срок оплаты
+    заказа (1 час)
+end note
+
+:Build request\nwith `amount` = **amount**, `digitalGood` = { amount: **goodPrice** }, `description` = **description**,\n`currency` = **currency**, `orderId` = **orderId**, `expirationDateTime` = **expirationDateTime**,\n`successRedirectUrl` = **successRedirectUrl**, `failRedirectUrl` = **failRedirectUrl**;
+note: A5.R1
+
+#palegreen :POST /api/h2h/links;
+
+:**Response**;
+note: A5.R2
+
+if (**Response.Code** = HTTP 200?) then (+)
+    :**Response.Body**;
+    stop
+endif
+
+if (**Response.Code** = HTTP 400 AND\n**Response.Body.error.code** = **Config.PaymentErrorCodes.IncorrectPaymentLinkSum**?) then (+)
+    :HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.OrderAmountTooLow**;
+    note
+        Ошибка платежа, обратитесь в магазин
+        ====
+        DigitalGoods:ORD_1003
+    end note
+    end
+endif
+
+:HTTP 400 BadRequest;
+end
+
+@enduml

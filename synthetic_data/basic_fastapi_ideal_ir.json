@@ -1,0 +1,1244 @@
+{
+  "schema_version": "synthetic-ir.v1",
+  "purpose": "Manual high-detail synthetic IR for diagram generation. This file is intentionally richer than extract_fastapi_routes output.",
+  "repo": {
+    "name": "basic-fastapi",
+    "root": "projects_for_test/basic-fastapi",
+    "entrypoint_module": "src.main",
+    "entrypoint_file": "projects_for_test/basic-fastapi/src/main.py",
+    "route_registration": {
+      "module": "src.api",
+      "file": "projects_for_test/basic-fastapi/src/api.py",
+      "steps": [
+        {
+          "kind": "create_app",
+          "source": "app = FastAPI()"
+        },
+        {
+          "kind": "include_router",
+          "router": "src.auth.controller.router",
+          "source": "app.include_router(auth_router)"
+        }
+      ]
+    }
+  },
+  "packages": [
+    {
+      "package": "src.auth",
+      "modules": [
+        "src.auth.controller",
+        "src.auth.service",
+        "src.auth.model"
+      ]
+    },
+    {
+      "package": "src.entities",
+      "modules": [
+        "src.entities.user"
+      ]
+    },
+    {
+      "package": "src.database",
+      "modules": [
+        "src.database.core"
+      ]
+    }
+  ],
+  "boundaries": {
+    "database": [
+      {
+        "name": "sqlalchemy_session",
+        "module": "src.database.core",
+        "provider": "get_db",
+        "annotation_alias": "DbSession",
+        "engine_source": "DATABASE_URL"
+      }
+    ],
+    "security": [
+      {
+        "name": "oauth2_bearer",
+        "module": "src.auth.service",
+        "type": "OAuth2PasswordBearer",
+        "token_url": "auth/token"
+      },
+      {
+        "name": "bcrypt_context",
+        "module": "src.auth.service",
+        "type": "CryptContext",
+        "schemes": [
+          "bcrypt"
+        ]
+      }
+    ],
+    "environment": [
+      {
+        "name": "SECRET_KEY",
+        "module": "src.auth.service",
+        "source": "os.getenv('SECRET_KEY')"
+      },
+      {
+        "name": "ALGORITHM",
+        "module": "src.auth.service",
+        "source": "os.getenv('ALGORITHM')"
+      },
+      {
+        "name": "ACCESS_TOKEN_EXPIRE_MINUTES",
+        "module": "src.auth.service",
+        "source": "int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES'))"
+      },
+      {
+        "name": "DATABASE_URL",
+        "module": "src.database.core",
+        "source": "os.getenv('DATABASE_URL')"
+      }
+    ],
+    "exceptions": [
+      {
+        "name": "AuthenticationError",
+        "module": "src.exceptions",
+        "file": "projects_for_test/basic-fastapi/src/exceptions.py",
+        "inherits": "fastapi.HTTPException",
+        "http_status": 401,
+        "default_detail": "Could not validate user"
+      }
+    ]
+  },
+  "entities": [
+    {
+      "name": "User",
+      "kind": "sqlalchemy_entity",
+      "package": "src.entities",
+      "module": "src.entities.user",
+      "file": "projects_for_test/basic-fastapi/src/entities/user.py",
+      "table": "users",
+      "columns": [
+        {
+          "name": "id",
+          "type": "UUID(as_uuid=True)",
+          "primary_key": true,
+          "nullable": false,
+          "default": "uuid.uuid4"
+        },
+        {
+          "name": "username",
+          "type": "String",
+          "unique": true,
+          "nullable": false
+        },
+        {
+          "name": "email",
+          "type": "String",
+          "unique": true,
+          "nullable": false
+        },
+        {
+          "name": "password_hash",
+          "type": "String",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "DateTime",
+          "default": "datetime.now"
+        },
+        {
+          "name": "updated_at",
+          "type": "DateTime",
+          "default": "datetime.now"
+        }
+      ],
+      "repr": "<User(username='{self.username}', email='{self.email}')>"
+    }
+  ],
+  "service_models": [
+    {
+      "name": "RegisterUserRequest",
+      "kind": "pydantic_model",
+      "package": "src.auth",
+      "module": "src.auth.model",
+      "file": "projects_for_test/basic-fastapi/src/auth/model.py",
+      "fields": [
+        {
+          "name": "username",
+          "type": "str",
+          "required": true
+        },
+        {
+          "name": "email",
+          "type": "EmailStr",
+          "required": true
+        },
+        {
+          "name": "password",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "used_by_routes": [
+        "POST /auth"
+      ]
+    },
+    {
+      "name": "Token",
+      "kind": "pydantic_model",
+      "package": "src.auth",
+      "module": "src.auth.model",
+      "file": "projects_for_test/basic-fastapi/src/auth/model.py",
+      "fields": [
+        {
+          "name": "access_token",
+          "type": "str",
+          "required": true
+        },
+        {
+          "name": "token_type",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "used_by_routes": [
+        "POST /auth/token"
+      ]
+    },
+    {
+      "name": "TokenData",
+      "kind": "pydantic_model",
+      "package": "src.auth",
+      "module": "src.auth.model",
+      "file": "projects_for_test/basic-fastapi/src/auth/model.py",
+      "fields": [
+        {
+          "name": "user_id",
+          "type": "str | None",
+          "required": false,
+          "default": null
+        }
+      ],
+      "methods": [
+        {
+          "name": "get_uuid",
+          "return_type": "UUID | None",
+          "logic": [
+            "if self.user_id: return UUID(self.user_id)",
+            "else return None"
+          ]
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "function_id": "src.auth.controller.register_user",
+      "name": "register_user",
+      "kind": "route_handler",
+      "package": "src.auth",
+      "module": "src.auth.controller",
+      "file": "projects_for_test/basic-fastapi/src/auth/controller.py",
+      "async": true,
+      "signature": "async def register_user(db: DbSession, register_user_request: model.RegisterUserRequest)",
+      "http": {
+        "method": "POST",
+        "path": "/auth",
+        "router_prefix": "/auth",
+        "status_code": 201,
+        "tags": [
+          "auth"
+        ]
+      },
+      "parameters": [
+        {
+          "name": "db",
+          "location": "dependency",
+          "type": "DbSession",
+          "provider": "src.database.core.get_db"
+        },
+        {
+          "name": "register_user_request",
+          "location": "body",
+          "type": "src.auth.model.RegisterUserRequest"
+        }
+      ],
+      "returns": {
+        "type": "None",
+        "http_effect": "201 Created with empty body"
+      },
+      "calls": [
+        {
+          "order": 1,
+          "target": "src.auth.service.register_user",
+          "kind": "service_call",
+          "arguments": [
+            "db",
+            "register_user_request"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "id": "h1",
+          "kind": "receive_request",
+          "package": "src.auth",
+          "module": "src.auth.controller",
+          "source": "register_user(db, register_user_request)"
+        },
+        {
+          "id": "h2",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.controller",
+          "target": "src.auth.service.register_user",
+          "args": [
+            "db",
+            "register_user_request"
+          ],
+          "source": "service.register_user(db, register_user_request)"
+        },
+        {
+          "id": "h3",
+          "kind": "implicit_http_response",
+          "package": "src.auth",
+          "module": "src.auth.controller",
+          "status_code": 201,
+          "source": "FastAPI returns empty 201 response"
+        }
+      ],
+      "edges": [
+        {
+          "from": "h1",
+          "to": "h2",
+          "kind": "next"
+        },
+        {
+          "from": "h2",
+          "to": "h3",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.controller.login_for_access_token",
+      "name": "login_for_access_token",
+      "kind": "route_handler",
+      "package": "src.auth",
+      "module": "src.auth.controller",
+      "file": "projects_for_test/basic-fastapi/src/auth/controller.py",
+      "async": true,
+      "signature": "async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: DbSession)",
+      "http": {
+        "method": "POST",
+        "path": "/auth/token",
+        "router_prefix": "/auth",
+        "response_model": "src.auth.model.Token",
+        "tags": [
+          "auth"
+        ]
+      },
+      "parameters": [
+        {
+          "name": "form_data",
+          "location": "dependency",
+          "type": "OAuth2PasswordRequestForm",
+          "provider": "fastapi.Depends()"
+        },
+        {
+          "name": "db",
+          "location": "dependency",
+          "type": "DbSession",
+          "provider": "src.database.core.get_db"
+        }
+      ],
+      "returns": {
+        "type": "src.auth.model.Token"
+      },
+      "calls": [
+        {
+          "order": 1,
+          "target": "src.auth.service.login_for_access_token",
+          "kind": "service_call",
+          "arguments": [
+            "form_data",
+            "db"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "id": "h1",
+          "kind": "receive_request",
+          "package": "src.auth",
+          "module": "src.auth.controller",
+          "source": "login_for_access_token(form_data, db)"
+        },
+        {
+          "id": "h2",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.controller",
+          "target": "src.auth.service.login_for_access_token",
+          "args": [
+            "form_data",
+            "db"
+          ],
+          "result": "token_response",
+          "source": "service.login_for_access_token(form_data, db)"
+        },
+        {
+          "id": "h3",
+          "kind": "return",
+          "package": "src.auth",
+          "module": "src.auth.controller",
+          "value": "token_response",
+          "source": "return service.login_for_access_token(form_data, db)"
+        }
+      ],
+      "edges": [
+        {
+          "from": "h1",
+          "to": "h2",
+          "kind": "next"
+        },
+        {
+          "from": "h2",
+          "to": "h3",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.verify_password",
+      "name": "verify_password",
+      "kind": "service_helper",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def verify_password(plain_password: str, hashed_password: str) -> bool",
+      "steps": [
+        {
+          "id": "vp1",
+          "kind": "call",
+          "target": "src.auth.service.bcrypt_context.verify",
+          "args": [
+            "plain_password",
+            "hashed_password"
+          ],
+          "result": "is_valid",
+          "source": "bcrypt_context.verify(plain_password, hashed_password)"
+        },
+        {
+          "id": "vp2",
+          "kind": "return",
+          "value": "is_valid",
+          "source": "return bcrypt_context.verify(plain_password, hashed_password)"
+        }
+      ],
+      "edges": [
+        {
+          "from": "vp1",
+          "to": "vp2",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.get_password_hash",
+      "name": "get_password_hash",
+      "kind": "service_helper",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def get_password_hash(password: str) -> str",
+      "steps": [
+        {
+          "id": "gh1",
+          "kind": "call",
+          "target": "src.auth.service.bcrypt_context.hash",
+          "args": [
+            "password"
+          ],
+          "result": "password_hash",
+          "source": "bcrypt_context.hash(password)"
+        },
+        {
+          "id": "gh2",
+          "kind": "return",
+          "value": "password_hash",
+          "source": "return bcrypt_context.hash(password)"
+        }
+      ],
+      "edges": [
+        {
+          "from": "gh1",
+          "to": "gh2",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.authenticate_user",
+      "name": "authenticate_user",
+      "kind": "service_helper",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def authenticate_user(username: str, password: str, db: Session) -> User | bool",
+      "reads_entities": [
+        "src.entities.user.User"
+      ],
+      "steps": [
+        {
+          "id": "au1",
+          "kind": "db_query_first",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "entity": "User",
+          "query": "db.query(User).filter(User.username == username).first()",
+          "result": "user",
+          "source": "user = db.query(User).filter(User.username == username).first()"
+        },
+        {
+          "id": "au2",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "src.auth.service.verify_password",
+          "args": [
+            "password",
+            "user.password_hash"
+          ],
+          "result": "password_ok",
+          "source": "verify_password(password, user.password_hash)"
+        },
+        {
+          "id": "au3",
+          "kind": "if",
+          "condition": "not user or not password_ok",
+          "source": "if not user or not verify_password(password, user.password_hash):"
+        },
+        {
+          "id": "au4",
+          "kind": "log_warning",
+          "message": "Failed login attempt for user: {username}",
+          "logger": "logging.warning",
+          "source": "logging.warning(f'Failed login attempt for user: {username}')"
+        },
+        {
+          "id": "au5",
+          "kind": "return",
+          "value": "False",
+          "source": "return False"
+        },
+        {
+          "id": "au6",
+          "kind": "return",
+          "value": "user",
+          "source": "return user"
+        }
+      ],
+      "edges": [
+        {
+          "from": "au1",
+          "to": "au2",
+          "kind": "next"
+        },
+        {
+          "from": "au2",
+          "to": "au3",
+          "kind": "next"
+        },
+        {
+          "from": "au3",
+          "to": "au4",
+          "kind": "true"
+        },
+        {
+          "from": "au4",
+          "to": "au5",
+          "kind": "next"
+        },
+        {
+          "from": "au3",
+          "to": "au6",
+          "kind": "false"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.create_access_token",
+      "name": "create_access_token",
+      "kind": "service_helper",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def create_access_token(username: str, user_id: UUID, expires_delta: timedelta) -> str",
+      "steps": [
+        {
+          "id": "cat1",
+          "kind": "assign",
+          "result": "encode",
+          "source": "encode = {'sub': username, 'id': str(user_id), 'exp': datetime.now(timezone.utc) + expires_delta}",
+          "expression_tree": {
+            "type": "dict",
+            "items": [
+              {
+                "key": "sub",
+                "value": "username"
+              },
+              {
+                "key": "id",
+                "value": "str(user_id)"
+              },
+              {
+                "key": "exp",
+                "value": "datetime.now(timezone.utc) + expires_delta"
+              }
+            ]
+          }
+        },
+        {
+          "id": "cat2",
+          "kind": "call",
+          "target": "jwt.encode",
+          "args": [
+            "encode",
+            "SECRET_KEY"
+          ],
+          "kwargs": [
+            {
+              "name": "algorithm",
+              "value": "ALGORITHM"
+            }
+          ],
+          "result": "jwt_token",
+          "source": "jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)"
+        },
+        {
+          "id": "cat3",
+          "kind": "return",
+          "value": "jwt_token",
+          "source": "return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)"
+        }
+      ],
+      "edges": [
+        {
+          "from": "cat1",
+          "to": "cat2",
+          "kind": "next"
+        },
+        {
+          "from": "cat2",
+          "to": "cat3",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.verify_access_token",
+      "name": "verify_access_token",
+      "kind": "service_helper",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def verify_access_token(token: str) -> model.TokenData",
+      "steps": [
+        {
+          "id": "vat1",
+          "kind": "try",
+          "source": "try: ..."
+        },
+        {
+          "id": "vat2",
+          "kind": "call",
+          "target": "jwt.decode",
+          "args": [
+            "token",
+            "SECRET_KEY"
+          ],
+          "kwargs": [
+            {
+              "name": "algorithms",
+              "value": "[ALGORITHM]"
+            }
+          ],
+          "result": "payload",
+          "source": "payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])"
+        },
+        {
+          "id": "vat3",
+          "kind": "assign",
+          "result": "user_id",
+          "source": "user_id = UUID(payload.get('id'))"
+        },
+        {
+          "id": "vat4",
+          "kind": "construct_model",
+          "target": "src.auth.model.TokenData",
+          "kwargs": [
+            {
+              "name": "user_id",
+              "value": "str(user_id)"
+            }
+          ],
+          "result": "token_data",
+          "source": "model.TokenData(user_id=str(user_id))"
+        },
+        {
+          "id": "vat5",
+          "kind": "return",
+          "value": "token_data",
+          "source": "return model.TokenData(user_id=str(user_id))"
+        },
+        {
+          "id": "vat6",
+          "kind": "except",
+          "exception": "PyJWTError",
+          "source": "except PyJWTError as e:"
+        },
+        {
+          "id": "vat7",
+          "kind": "log_warning",
+          "logger": "logging.warning",
+          "message": "Could not validate credentials: {e}",
+          "source": "logging.warning(f'Could not validate credentials: {e}')"
+        },
+        {
+          "id": "vat8",
+          "kind": "raise",
+          "exception": "src.exceptions.AuthenticationError",
+          "source": "raise AuthenticationError()"
+        }
+      ],
+      "edges": [
+        {
+          "from": "vat1",
+          "to": "vat2",
+          "kind": "next"
+        },
+        {
+          "from": "vat2",
+          "to": "vat3",
+          "kind": "next"
+        },
+        {
+          "from": "vat3",
+          "to": "vat4",
+          "kind": "next"
+        },
+        {
+          "from": "vat4",
+          "to": "vat5",
+          "kind": "next"
+        },
+        {
+          "from": "vat1",
+          "to": "vat6",
+          "kind": "except"
+        },
+        {
+          "from": "vat6",
+          "to": "vat7",
+          "kind": "next"
+        },
+        {
+          "from": "vat7",
+          "to": "vat8",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.register_user",
+      "name": "register_user",
+      "kind": "service_entry",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def register_user(db: Session, user: model.RegisterUserRequest) -> None",
+      "writes_entities": [
+        "src.entities.user.User"
+      ],
+      "diagram_priority": "high",
+      "summary": "Create User entity from request, hash password, persist user in DB, log and re-raise on error.",
+      "steps": [
+        {
+          "id": "ru1",
+          "kind": "try",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "source": "try: ..."
+        },
+        {
+          "id": "ru2",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "uuid.uuid4",
+          "args": [],
+          "result": "generated_user_id",
+          "source": "uuid.uuid4()"
+        },
+        {
+          "id": "ru3",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "src.auth.service.get_password_hash",
+          "args": [
+            "user.password"
+          ],
+          "result": "hashed_password",
+          "source": "get_password_hash(user.password)"
+        },
+        {
+          "id": "ru4",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "datetime.now",
+          "args": [
+            "timezone.utc"
+          ],
+          "result": "created_at_ts",
+          "source": "datetime.now(timezone.utc)"
+        },
+        {
+          "id": "ru5",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "datetime.now",
+          "args": [
+            "timezone.utc"
+          ],
+          "result": "updated_at_ts",
+          "source": "datetime.now(timezone.utc)"
+        },
+        {
+          "id": "ru6",
+          "kind": "construct_entity",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "src.entities.user.User",
+          "kwargs": [
+            {
+              "name": "id",
+              "value": "generated_user_id"
+            },
+            {
+              "name": "username",
+              "value": "user.username"
+            },
+            {
+              "name": "email",
+              "value": "user.email"
+            },
+            {
+              "name": "password_hash",
+              "value": "hashed_password"
+            },
+            {
+              "name": "created_at",
+              "value": "created_at_ts"
+            },
+            {
+              "name": "updated_at",
+              "value": "updated_at_ts"
+            }
+          ],
+          "result": "user_model",
+          "source": "user_model = User(...)"
+        },
+        {
+          "id": "ru7",
+          "kind": "db_add",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "entity": "src.entities.user.User",
+          "args": [
+            "user_model"
+          ],
+          "source": "db.add(user_model)"
+        },
+        {
+          "id": "ru8",
+          "kind": "db_commit",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "source": "db.commit()"
+        },
+        {
+          "id": "ru9",
+          "kind": "return",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "value": null,
+          "source": "implicit return None"
+        },
+        {
+          "id": "ru10",
+          "kind": "except",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "exception": "Exception",
+          "source": "except Exception as e:"
+        },
+        {
+          "id": "ru11",
+          "kind": "log_error",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "logger": "logging.error",
+          "message": "Error registering user: {user.username} with Error: {e}",
+          "source": "logging.error(f'Error registering user: {user.username} with Error: {e}')"
+        },
+        {
+          "id": "ru12",
+          "kind": "raise",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "exception": "re-raise original exception",
+          "source": "raise"
+        }
+      ],
+      "edges": [
+        {
+          "from": "ru1",
+          "to": "ru2",
+          "kind": "next"
+        },
+        {
+          "from": "ru2",
+          "to": "ru3",
+          "kind": "next"
+        },
+        {
+          "from": "ru3",
+          "to": "ru4",
+          "kind": "next"
+        },
+        {
+          "from": "ru4",
+          "to": "ru5",
+          "kind": "next"
+        },
+        {
+          "from": "ru5",
+          "to": "ru6",
+          "kind": "next"
+        },
+        {
+          "from": "ru6",
+          "to": "ru7",
+          "kind": "next"
+        },
+        {
+          "from": "ru7",
+          "to": "ru8",
+          "kind": "next"
+        },
+        {
+          "from": "ru8",
+          "to": "ru9",
+          "kind": "next"
+        },
+        {
+          "from": "ru1",
+          "to": "ru10",
+          "kind": "except"
+        },
+        {
+          "from": "ru10",
+          "to": "ru11",
+          "kind": "next"
+        },
+        {
+          "from": "ru11",
+          "to": "ru12",
+          "kind": "next"
+        }
+      ],
+      "nested_calls": [
+        {
+          "called_from_step": "ru3",
+          "target_function_id": "src.auth.service.get_password_hash"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.get_current_user",
+      "name": "get_current_user",
+      "kind": "service_dependency",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def get_current_user(token: str = Depends(oauth2_bearer)) -> User",
+      "steps": [
+        {
+          "id": "gcu1",
+          "kind": "call",
+          "target": "src.auth.service.verify_access_token",
+          "args": [
+            "token"
+          ],
+          "result": "token_data",
+          "source": "verify_access_token(token)"
+        },
+        {
+          "id": "gcu2",
+          "kind": "return",
+          "value": "token_data",
+          "source": "return verify_access_token(token)"
+        }
+      ],
+      "edges": [
+        {
+          "from": "gcu1",
+          "to": "gcu2",
+          "kind": "next"
+        }
+      ]
+    },
+    {
+      "function_id": "src.auth.service.login_for_access_token",
+      "name": "login_for_access_token",
+      "kind": "service_entry",
+      "package": "src.auth",
+      "module": "src.auth.service",
+      "file": "projects_for_test/basic-fastapi/src/auth/service.py",
+      "signature": "def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends(oauth2_bearer)], db: Session) -> model.Token",
+      "reads_entities": [
+        "src.entities.user.User"
+      ],
+      "diagram_priority": "high",
+      "summary": "Authenticate user, raise 401 on invalid credentials, create JWT token, return Token response model.",
+      "steps": [
+        {
+          "id": "la1",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "src.auth.service.authenticate_user",
+          "args": [
+            "form_data.username",
+            "form_data.password",
+            "db"
+          ],
+          "result": "user",
+          "source": "user = authenticate_user(form_data.username, form_data.password, db)"
+        },
+        {
+          "id": "la2",
+          "kind": "if",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "condition": "not user",
+          "source": "if not user:"
+        },
+        {
+          "id": "la3",
+          "kind": "raise",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "exception": "src.exceptions.AuthenticationError",
+          "source": "raise AuthenticationError()"
+        },
+        {
+          "id": "la4",
+          "kind": "assign",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "result": "token_expires",
+          "source": "token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)"
+        },
+        {
+          "id": "la5",
+          "kind": "call",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "src.auth.service.create_access_token",
+          "args": [
+            "user.username",
+            "user.id",
+            "token_expires"
+          ],
+          "result": "token",
+          "source": "token = create_access_token(user.username, user.id, token_expires)"
+        },
+        {
+          "id": "la6",
+          "kind": "construct_model",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "target": "src.auth.model.Token",
+          "kwargs": [
+            {
+              "name": "access_token",
+              "value": "token"
+            },
+            {
+              "name": "token_type",
+              "value": "bearer"
+            }
+          ],
+          "result": "token_response",
+          "source": "model.Token(access_token=token, token_type='bearer')"
+        },
+        {
+          "id": "la7",
+          "kind": "return",
+          "package": "src.auth",
+          "module": "src.auth.service",
+          "value": "token_response",
+          "source": "return model.Token(access_token=token, token_type='bearer')"
+        }
+      ],
+      "edges": [
+        {
+          "from": "la1",
+          "to": "la2",
+          "kind": "next"
+        },
+        {
+          "from": "la2",
+          "to": "la3",
+          "kind": "true"
+        },
+        {
+          "from": "la2",
+          "to": "la4",
+          "kind": "false"
+        },
+        {
+          "from": "la4",
+          "to": "la5",
+          "kind": "next"
+        },
+        {
+          "from": "la5",
+          "to": "la6",
+          "kind": "next"
+        },
+        {
+          "from": "la6",
+          "to": "la7",
+          "kind": "next"
+        }
+      ],
+      "nested_calls": [
+        {
+          "called_from_step": "la1",
+          "target_function_id": "src.auth.service.authenticate_user"
+        },
+        {
+          "called_from_step": "la5",
+          "target_function_id": "src.auth.service.create_access_token"
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "route_id": "POST /auth",
+      "handler_function_id": "src.auth.controller.register_user",
+      "service_entry_function_id": "src.auth.service.register_user",
+      "request_model": "src.auth.model.RegisterUserRequest",
+      "response_model": null,
+      "core_entity": "src.entities.user.User",
+      "diagram_candidates": [
+        {
+          "name": "route_activity",
+          "focus": "request -> service call -> DB insert -> 201 response"
+        },
+        {
+          "name": "service_activity",
+          "focus": "register_user internals with try/except and User construction"
+        },
+        {
+          "name": "data_transformation",
+          "focus": "RegisterUserRequest -> User entity"
+        }
+      ],
+      "call_chain": [
+        "src.auth.controller.register_user",
+        "src.auth.service.register_user",
+        "src.auth.service.get_password_hash",
+        "src.auth.service.bcrypt_context.hash",
+        "src.entities.user.User",
+        "db.add",
+        "db.commit"
+      ]
+    },
+    {
+      "route_id": "POST /auth/token",
+      "handler_function_id": "src.auth.controller.login_for_access_token",
+      "service_entry_function_id": "src.auth.service.login_for_access_token",
+      "request_model": "fastapi.security.OAuth2PasswordRequestForm",
+      "response_model": "src.auth.model.Token",
+      "core_entity": "src.entities.user.User",
+      "diagram_candidates": [
+        {
+          "name": "route_activity",
+          "focus": "request form -> authenticate -> token generation -> Token response"
+        },
+        {
+          "name": "service_activity",
+          "focus": "login_for_access_token with auth branch and token creation"
+        },
+        {
+          "name": "sub_activity_authenticate_user",
+          "focus": "DB lookup + password verification + invalid-credentials branch"
+        },
+        {
+          "name": "sub_activity_create_access_token",
+          "focus": "claims assembly + jwt.encode"
+        }
+      ],
+      "call_chain": [
+        "src.auth.controller.login_for_access_token",
+        "src.auth.service.login_for_access_token",
+        "src.auth.service.authenticate_user",
+        "db.query(User).filter(...).first",
+        "src.auth.service.verify_password",
+        "src.auth.service.bcrypt_context.verify",
+        "src.auth.service.create_access_token",
+        "jwt.encode",
+        "src.auth.model.Token"
+      ]
+    }
+  ],
+  "diagram_generation_hints": {
+    "primary_grouping": [
+      "route_handler",
+      "service_entry",
+      "service_helper",
+      "entity",
+      "request_response_model"
+    ],
+    "recommended_step_kinds_for_puml": {
+      "receive_request": "R1",
+      "call": "A*",
+      "db_query_first": "DB read",
+      "db_add": "DB write",
+      "db_commit": "DB commit",
+      "construct_entity": "M*",
+      "construct_model": "M*",
+      "if": "decision",
+      "raise": "error branch",
+      "log_warning": "side-effect",
+      "log_error": "side-effect",
+      "return": "R2"
+    },
+    "recommended_route_decomposition": {
+      "POST /auth": [
+        "main route activity",
+        "register_user service subdiagram",
+        "request-to-entity data transformation"
+      ],
+      "POST /auth/token": [
+        "main route activity",
+        "authenticate_user subdiagram",
+        "create_access_token subdiagram",
+        "optional token payload data transformation"
+      ]
+    }
+  }
+}

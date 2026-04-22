@@ -1,0 +1,54 @@
+@startuml
+title Формирование TopUpPositions
+start
+
+:Params:
+**donateHubPositions** : list<DonateHubPositionDto>,
+**gameId**,
+**gameName**,
+**wataRateRubToUsdt**,
+**terminalComissionInPercent**;
+
+:**topUpPositions** = empty list<TopUpPositionDto>;
+note
+    Создаем пустой список,
+    целевой объект возвращаемый в конце
+    (после доп. фильтрации)
+end note
+
+repeat :foreach **position** in **donateHubPositions**;
+    #palegreen :**totalAmountRub** = calculate(**position.price**, **wataRateRubToUsdt**, **terminalComissionInPercent**);
+    note: C1
+    
+    :**topUpPosition** : TopUpPositionDto = map (**position**);
+    note
+        M1
+        DonateHubPositionDto -> TopUpPositionDto
+    end note
+    
+    :**topUpPosition.price** = **totalAmountRub**;
+    note
+        Заменяем цену с учетом комиссии
+        в поле `price`
+    end note
+    
+    :**topUpPosition.productId** = **gameId**;
+    
+    :**topUpPosition.productName** = **gameName**;
+    
+    :add **topUpPosition** into **topUpPositions**;
+repeat while;
+
+:**filteredTopUpPositions** = filter **topUpPositions**\nwhere `price` > 0;
+note
+    DonateHub API может вернуть
+    позицию с нулевой ценой
+    (особенности реализации
+    на стороне DonateHub)
+end note
+
+:return: **filteredTopUpPositions**;
+
+stop
+
+@enduml

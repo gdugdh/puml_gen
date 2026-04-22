@@ -1,0 +1,118 @@
+@startuml
+title POST /api/webhook/pay - Получение статуса приема платежа из WataApi и создание заказа на стороне DonateHub
+start
+
+:Request;
+note: R1
+
+:**transactionStatus** = Request.Body.transactionStatus;
+note: Статус приема платежа на Wata
+
+:**orderId** = Request.Body.orderId;
+note
+    Идентификатор заказа
+    в системе Пользователя
+end note
+
+:**terminalPublicId** = Request.Body.terminalPublicId;
+note: Сквозной идентификатор
+
+:**Config** = application config;
+
+partition Найти заказ в БД {
+    if (find in DB `Orders` where ( `OrderId` = **orderId** AND `PublicId` = **terminalPublicId** )) then (-)
+        :HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.NotFound**;
+        note
+            Заказ не найден
+            ====
+            DigitalGoods:ORD_1001
+        end note
+        end
+    endif
+    
+    :**orderInDb**;
+    note: Найденный заказ
+}
+
+if (**orderInDb.Status** = **Config.DonateHubOrderStatuses.Success**) then (+)
+    :Build response\nwith `{ "status": "Success" }`;
+    note: R2
+
+    :HTTP 200 OK;
+    note
+        Успешный статус для заказа
+        уже получен из DonateHub
+    end note
+    end
+endif
+
+if (CurrentTime > **orderInDb.CreationTime** + **Config.OrderConsts.OrderLifetimeMinutes**) then (+)
+    partition Обновить статус заказа в БД {
+        :update in DB `Orders` where (`OrderId` = **orderInDb.OrderId**)\non ( `Status` = **Config.DigitalGoodsOrderStatuses.Expired** );
+    }
+    
+    :HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.ExpiredOrder**;
+    note
+        Истёк срок оплаты заказа (1 час)
+        ====
+        DigitalGoods:ORD_1004
+    end note
+    end
+endif
+
+if (**orderInDb.Type** = **Config.DigitalGoodsOrderType.Steam**) then (+)
+    #palegreen :**donateHubOrder** = create steam order\nby POST /api/create_steam_order\nwith: `customId` = **orderInDb.details.DonateHubCustomId**\non DonateHub;
+    note: A1
+    
+    partition Обновить заказ в БД {
+        :update in DB `Orders` where (`OrderId` = **orderId**)\non ( `Status` = **donateHubOrder.status**, `DonateHubId` = **donateHubOrder.id** );
+    }
+    
+    :Build response\nwith `{ "status": "Success" }`;
+    note: R2
+    
+    :HTTP 200 OK;
+    end
+endif
+
+if (**orderInDb.Type** = **Config.DigitalGoodsOrderType.TopUp**) then (+)
+    #palegreen :**donateHubOrder** = create topup order\nby POST /api/create_game_order\nwith: `position` = **orderInDb.details.PositionId**,\n`fields` = `{ Server: **orderInDb.details.Server**, "User ID": **orderInDb.details.UserId** }`\non DonateHub;
+    note: A2
+    
+    partition Обновить заказ в БД {
+        :update in DB `Orders` where (`OrderId` = **orderId**)\non ( `Status` = **donateHubOrder.status**, `DonateHubId` = **donateHubOrder.id** );
+    }
+    
+    :Build response\nwith `{ "status": "Success" }`;
+    note: R2
+    
+    :HTTP 200 OK;
+    end
+endif
+
+if (**orderInDb.Type** = **Config.DigitalGoodsOrderType.Voucher**) then (+)
+    #palegreen :**donateHubOrder** = create voucher order\nby POST /api/vouchers/buy\nwith: `codeId` = **orderInDb.details.CodeId**,\n`count` = **orderInDb.details.Count**\non DonateHub;
+    note: A3
+    
+    partition Обновить заказ в БД {
+        :update in DB `Orders` where (`OrderId` = **orderId**)
+        on ( `Status` = **donateHubOrder.status**, `DonateHubId` = **donateHubOrder.id**,
+        `Details.GameId` = **donateHubOrder.game_id**, `Details.PositionId` = **donateHubOrder.position_id** );
+    }
+    
+    :Build response\nwith `{ "status": "Success" }`;
+    note: R2
+    
+    :HTTP 200 OK;
+    end
+endif
+
+:HTTP 400 BadRequest\nwith error code **Config.ErrorCodes.NotFound**;
+note
+    Заказ не найден
+    ====
+    DigitalGoods:ORD_1001
+end note
+end
+
+@enduml

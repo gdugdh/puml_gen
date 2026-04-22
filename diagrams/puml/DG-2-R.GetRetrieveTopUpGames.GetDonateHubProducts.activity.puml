@@ -1,0 +1,20 @@
+@startuml
+title GET /api/products - Получение списка позиций всех продуктов из DonateHub
+start
+
+:Params: no params;
+
+#palegreen :GET /api/products;
+
+:**Response**;
+note: A3.R2
+
+if (**Response.Code** = HTTP 200?) then (+)
+    :**Response.Body**;
+    stop
+endif
+
+:HTTP 400 BadRequest;
+end
+
+@enduml

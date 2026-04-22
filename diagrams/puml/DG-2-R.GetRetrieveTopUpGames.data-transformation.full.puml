@@ -1,0 +1,184 @@
+@startuml
+skinparam packageStyle rectangle
+top to bottom direction
+
+(GET /api/products\nfrom DonateHub) as A3_get
+note left of A3_get: A3
+[**donateHubPositions**] as donateHubPositions
+
+(GET /api/game\nfrom DonateHub) as A2_get
+note left of A2_get: A2
+[**donateHubGames**] as donateHubGames  
+
+package "A5 Формирование коллекции(map) игр с их позициями\nв формате DonateHub" as A5 {    
+    portin "list<DonateHubPositionDto>" as A5_portin_positions
+    portin "list<DonateHubGameDto>" as A5_portin_games
+    portout "map<key, list<DonateHubPositionDto>>" as A5_portout
+    
+    (Формируем множество ключей\nset<key>\nиз list<DonateHubGameDto>\nпо полю `id`) as A5_makeSetOfKeys
+
+    (Группировка по `product_id`\nи фильтрация по `category` = "Games"\nAND `price` > 0) as A5_grouping
+    note left of A5_grouping
+        **Группировка:**
+        Получаем коллекцию(map<key, value>) позиций, 
+        сгруппированных по `product_id`:
+            key - `product_id`
+            value - массив соответствующих 
+        элементов **donateHubPositions**
+
+        **Фильтрация:**
+        Проверка (`category` = "Games") обеспечивает 
+        отсев продуктов из другой категории,
+        т.к. ключи `product_id` не являются сквозными.
+        А также `price` может быть null
+    end note
+    
+    [positionsGroupedByProductId] as A5_positionsGroupedByProductId
+    note left of A5_positionsGroupedByProductId
+        Сгруппированная коллекция
+        map<key, list<DonateHubPositionDto>>
+    end note
+    
+    (Фильтрация по **game.id**) as A5_filtering
+    note left of A5_filtering
+        **Фильтрация:**
+        Оставляем только позиции где:
+        (`product_id` in **gameIds**)
+        где **gameIds** - множество(set) **game.id** из **donateHubGames**
+
+        Таким образом, останутся только позиции продуктов, 
+        которые также присутствуют в списке **donateHubGames**
+    end note
+     
+    [filteredPositionsGroupedByProductId] as A5_filteredPositionsGroupedByProductId
+    note left of A5_filteredPositionsGroupedByProductId
+        Сгруппированная и фильтрованная коллекция
+        map<key, list<DonateHubPositionDto>>
+    end note
+}
+
+package "A6 Формирование TopUpGames" as M2 {    
+    portin "map<key, list<DonateHubPositionDto>>" as A6_portin_groupedPositions
+    portin "list<DonateHubGameDto>>" as A6_portin_games
+    portout "list<TopUpGameDto>" as A6_portout
+    
+    [donateHubGames] as A6_donateHubGames
+    note right of A6_donateHubGames
+        Исходный список игр в формате DonateHub
+        list<DonateHubGameDto>
+        c позициями в формате DonateHub
+        list<DonateHubPositionDto>
+    end note
+            
+    [topUpGamesWithDonateHubPositions] as A6_topUpGamesWithDonateHubPositions
+    note right of A6_topUpGamesWithDonateHubPositions
+        Список игр в формате TopUp
+        list<TopUpGameDto>
+        c позициями в формате DonateHub
+        list<DonateHubPositionDto>
+    end note
+    
+    [topUpGamesWithTopUpPositions] as A6_topUpGamesWithTopUpPositions
+    note right of A6_topUpGamesWithTopUpPositions
+        Список игр в формате TopUp
+        list<TopUpGameDto>
+        с  позициями в формате TopUp
+        list<TopUpPostitionsDto>
+    end note
+    
+    (Маппинг полей) as A6_mapping
+    note left of A6_mapping: M2
+    note right of A6_mapping
+        Список игр в формате DonateHub,
+        c позициями в формате DonateHub
+        ->
+        Список игр в формате TopUp,
+        но по прежнему c позициями в **формате DonateHub**
+    end note
+    
+    (Замена списка позиций\nв поле `positions`) as A6_addPositions
+    note right of A6_addPositions    
+        Список игр в формате TopUp,
+        c позициями в формате DonateHub        
+        ->
+        Список игр в формате TopUp,
+        с позициями в формате TopUp
+    end note
+    
+    (Найти список позиций\n`list<DonateHubPositionDto>`\nиз коллекции\n`map<key, list<DonateHubPositionDto>>`\nгде `key` = **game.id**) as A6_findPositions
+    
+    package "A7 Формирование TopUpPositions" as M1{    
+        portin "list<DonateHubPositionDto>>" as A7_portin
+        portout "list<TopUpPositionDto>" as A7_portout
+        
+        [donateHubPostions] as A7_donateHubPostions
+        note left of A7_donateHubPostions
+            Исходный список позиций в формате DonateHub
+            list<DonateHubPositionDto>
+        end note
+            
+        (Маппинг полей) as A7_mapping
+        note left of A7_mapping: M1
+        
+        (Перерасчет `price` позиции с учетом\nWata комииссии и рейт) as A7_calc
+        note left of A7_calc: C1
+        
+        [topUpPositions] as A7_topUpPositions
+        note left of A7_topUpPositions
+            Список позиций в формате DigitalGoods
+            list<TopUpPositionDto>
+        end note
+        
+        [recalculatedTopUpPositions] as A7_recalculatedTopUpPositions
+        note left of A7_recalculatedTopUpPositions
+            Список позиций в формате DigitalGoods,
+            с перерасчитанным `price`
+            list<TopUpPositionDto>
+        end note
+    }    
+}
+
+
+(Возвращаемый результат) as R2_result
+note right of R2_result: R2
+    
+A3_get -right-> donateHubPositions
+donateHubPositions --> A5_portin_positions
+
+A2_get -right-> donateHubGames
+donateHubGames --> A5_portin_games
+donateHubGames --> A6_portin_games
+
+A5_portin_positions ==> A5_grouping : list<DonateHubPositionDto>
+A5_grouping ==> A5_positionsGroupedByProductId : map<key, list<DonateHubPositionDto>>
+A5_positionsGroupedByProductId ==> A5_filtering : map<key, list<DonateHubPositionDto>>
+A5_portin_games --> A5_makeSetOfKeys
+A5_makeSetOfKeys ..> A5_filtering : set<key>
+A5_filtering ==> A5_filteredPositionsGroupedByProductId : map<key, list<DonateHubPositionDto>>
+A5_filteredPositionsGroupedByProductId ==>A5_portout
+A5_portout --> A6_portin_groupedPositions
+
+A7_portin --> A7_donateHubPostions : list<DonateHubPositionDto>
+A7_donateHubPostions --> A7_mapping : list<DonateHubPositionDto>
+A7_mapping --> A7_topUpPositions : list<TopUpPositionDto>
+A7_topUpPositions -->A7_calc
+A7_calc --> A7_recalculatedTopUpPositions
+A7_recalculatedTopUpPositions --> A7_portout : list<TopUpPositionDto>
+
+A6_portin_games ==> A6_donateHubGames : list<DonateHubGameDto>
+A6_donateHubGames ==> A6_mapping : list<DonateHubGameDto>
+A6_mapping ==> A6_topUpGamesWithDonateHubPositions : list<TopUpGameDto<DonateHubPositionDto>>
+A6_topUpGamesWithDonateHubPositions ==> A6_addPositions : list<TopUpGameDto<DonateHubPositionDto>>
+A6_addPositions ==> A6_topUpGamesWithTopUpPositions : list<TopUpGameDto>
+A6_topUpGamesWithTopUpPositions ==> A6_portout : list<TopUpGameDto>
+A6_portout --> R2_result : list<TopUpGameDto>
+
+A6_findPositions <-down- A6_addPositions : game.id
+A6_portin_groupedPositions ..> A6_findPositions : map<key, list<DonateHubPositionDto>>
+A6_findPositions --> A7_portin
+A7_portout ..> A6_addPositions : list<TopUpPositionDto>
+
+
+
+
+@enduml
