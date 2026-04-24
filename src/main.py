@@ -17,18 +17,11 @@ def main(argv: list[str] | None = None) -> int:
         default="output",
         help="Directory for generated .puml files.",
     )
-    parser.add_argument(
-        "--diagram-mode",
-        choices=["route", "service"],
-        default="route",
-        help="Diagram detail mode.",
-    )
     args = parser.parse_args(argv)
 
     generated_files = generate_from_file(
         Path(args.input),
         Path(args.outdir),
-        diagram_mode=args.diagram_mode,
     )
     for path in generated_files:
         print(path.resolve().as_posix())

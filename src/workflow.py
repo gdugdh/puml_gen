@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import difflib
 import json
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from langchain_core.prompts import PromptTemplate
 from langgraph.graph import END, START, StateGraph
@@ -10,25 +10,11 @@ from langgraph.graph import END, START, StateGraph
 from src.llm import LLMConfig, chat_json
 
 
-DiagramMode = Literal["route", "service"]
-
-STYLE_SUMMARY = """
-Стиль PlantUML activity:
-- Только activity-диаграмма.
-- Route mode: Request в начале, R1/R2, финальный HTTP.
-- Service mode: без Request и без route-level HTTP.
-- Действия только как :...;
-- Ветвление только if (...) then (+) / else (-) / endif
-- БД только текстом: find/create/update in DB `Table` ...
-- Не использовать try/catch/except/end try.
-""".strip()
-
 FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
     """
 Ты превращаешь IR одной route-функции в строгий JSON-блок.
-Ответ только JSON.
 
-Формат:
+Формат ответа:
 {{
   "blocks": [
     {{"kind":"action","text":"..."}},
@@ -40,20 +26,7 @@ FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
 Жесткие правила:
 1. Только JSON, без markdown.
 2. kind только: action, if, partition.
-3. Нельзя писать @startuml, @enduml, title, start, end, Request, R1, R2, Build response, HTTP.
-4. Показывай только orchestration текущей route-функции.
-5. Нельзя раскрывать service/helper functions.
-6. Нельзя писать строки про Request.* или response-level блоки.
-7. Нельзя использовать try/catch/except.
-8. action.text без ":" в начале и без ";" в конце.
-9. В route mode делай блок кратким и orchestration-only.
-10. В service mode route-блок нужен только как контекст для service-функций, не добавляй лишние детали.
-
-Стиль:
-{style_summary}
-
-diagram_mode:
-{diagram_mode}
+3. Старайся описывать каждый блок кодом, если никак не получится передать смысл кода, то текстом описывай
 
 route:
 {route_json}
@@ -68,10 +41,9 @@ feedback:
 
 FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
     """
-Ты превращаешь IR одной service-функции в строгий JSON-блок.
-Ответ только JSON.
+Ты превращаешь IR одной функции в строгую последовательность блоков в JSON.
 
-Формат:
+Формат ответа:
 {{
   "blocks": [
     {{"kind":"action","text":"..."}},
@@ -83,31 +55,9 @@ FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
 Жесткие правила:
 1. Только JSON, без markdown.
 2. kind только: action, if, partition.
-3. Нельзя писать @startuml, @enduml, title, start, end, Request, R1, R2, Build response, HTTP.
-4. Раскрывай только текущую service-функцию; nested helper functions раскрывать нельзя.
-5. Не дублируй шаги, которые уже отражены в current_route_code.
-6. Нельзя писать строки про Request.* или response-level блоки.
-7. Нельзя использовать try/catch/except.
-8. action.text без ":" в начале и без ";" в конце.
-9. В route mode пиши только значимые бизнес-шаги service-функции.
-10. В service mode можно чуть подробнее, но без технического шума.
+3. Старайся описывать каждый блок кодом, если никак не получится передать смысл кода, то текстом описывай
 
-Стиль:
-{style_summary}
-
-diagram_mode:
-{diagram_mode}
-
-route:
-{route_json}
-
-route_function:
-{route_function_json}
-
-current_route_code:
-{current_route_code}
-
-service_function:
+function:
 {function_json}
 
 feedback:
@@ -130,11 +80,6 @@ COMPRESS_BLOCK_PROMPT = PromptTemplate.from_template(
 3. Не удаляй важные error branches, DB read/write, entity/model construction, внешние вызовы.
 4. Удаляй или схлопывай мелкие технические шаги без бизнес-смысла.
 5. Не добавляй новые блоки, которых не было в исходном JSON.
-6. В route mode делай блок заметно короче.
-7. В service mode сохраняй больше деталей.
-
-diagram_mode:
-{diagram_mode}
 
 current_block_json:
 {current_block_json}
@@ -152,12 +97,9 @@ VALIDATOR_PROMPT = PromptTemplate.from_template(
 2. route-level дубли внутри service-body;
 3. helper-логика раскрыта второй раз;
 4. важная ветка потеряна;
-5. слишком много технического шума для route mode.
+5. слишком много технического шума.
 
 Не придирайся к мелкому стилю.
-
-diagram_mode:
-{diagram_mode}
 
 route:
 {route_json}
@@ -177,11 +119,16 @@ deterministic_error:
 )
 
 
+class ServiceArtifact(TypedDict):
+    function_id: str
+    blocks: list[dict[str, object]]
+    current_puml: str
+
+
 class DiagramState(TypedDict, total=False):
     route: dict[str, object]
     route_function: dict[str, object]
     service_functions: list[dict[str, object]]
-    diagram_mode: DiagramMode
     llm_config: LLMConfig
     header_fragment: str
     footer_fragment: str
@@ -191,6 +138,7 @@ class DiagramState(TypedDict, total=False):
     filtered_blocks: list[dict[str, object]]
     compressed_blocks: list[dict[str, object]]
     body_fragment: str
+    service_artifacts: list[ServiceArtifact]
     current_puml: str
     current_diff: str
     validation_feedback: str
@@ -228,8 +176,8 @@ def build_workflow():
 
 
 def build_shell_node(state: DiagramState) -> DiagramState:
-    header_fragment = _build_header(state["diagram_mode"], state["route"], state["route_function"], state["service_functions"])
-    footer_fragment = _build_footer(state["diagram_mode"], state["route"], state["route_function"], state["service_functions"])
+    header_fragment = _build_header(state["route"], state["route_function"])
+    footer_fragment = _build_footer(state["route"], state["route_function"])
     current_puml = _assemble_puml(header_fragment, "", footer_fragment)
     return {
         "header_fragment": header_fragment,
@@ -240,6 +188,7 @@ def build_shell_node(state: DiagramState) -> DiagramState:
         "filtered_blocks": [],
         "compressed_blocks": [],
         "body_fragment": "",
+        "service_artifacts": [],
         "current_puml": current_puml,
         "current_diff": _diff_text("", current_puml),
         "retry_count": 0,
@@ -250,21 +199,18 @@ def build_shell_node(state: DiagramState) -> DiagramState:
 
 def generate_route_blocks_node(state: DiagramState) -> DiagramState:
     prompt = FUNCTION_BLOCK_PROMPT.format(
-        style_summary=STYLE_SUMMARY,
-        diagram_mode=state["diagram_mode"],
         route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
         function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
         feedback=state.get("validation_feedback", ""),
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты генерируешь только JSON-блоки для route activity-диаграммы.",
+        system_prompt="Ты генерируешь только JSON-блоки для route-функции.",
         user_prompt=prompt,
         node_name="generate_route_blocks",
     )
     route_blocks = _filter_generated_blocks(
         _ensure_dict_list(result.get("blocks")),
-        diagram_mode=state["diagram_mode"],
         route_function=state["route_function"],
     )
     route_body_fragment = _render_blocks(route_blocks)
@@ -278,47 +224,48 @@ def generate_route_blocks_node(state: DiagramState) -> DiagramState:
 def generate_service_blocks_node(state: DiagramState) -> DiagramState:
     raw_blocks: list[dict[str, object]] = []
     filtered_service_blocks: list[dict[str, object]] = []
+    service_artifacts: list[ServiceArtifact] = []
 
     for service_function in state["service_functions"]:
         prompt = FUNCTION_SERVICE_BLOCK_PROMPT.format(
-            style_summary=STYLE_SUMMARY,
-            diagram_mode=state["diagram_mode"],
-            route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
-            route_function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
-            current_route_code=state.get("route_body_fragment", ""),
             function_json=json.dumps(service_function, ensure_ascii=False, indent=2),
             feedback=state.get("validation_feedback", ""),
         )
         result = chat_json(
             state["llm_config"],
-            system_prompt="Ты генерируешь только JSON-блоки для service activity-диаграммы.",
+            system_prompt="Ты генерируешь только JSON-блоки для функции.",
             user_prompt=prompt,
             node_name=f"generate_service_blocks:{service_function.get('function_id', 'unknown')}",
         )
         next_raw_blocks = _ensure_dict_list(result.get("blocks"))
         next_filtered_blocks = _filter_generated_blocks(
             next_raw_blocks,
-            diagram_mode=state["diagram_mode"],
             route_function=state["route_function"],
         )
+        function_id = str(service_function.get("function_id", "unknown"))
         raw_blocks.extend(next_raw_blocks)
         filtered_service_blocks.extend(next_filtered_blocks)
+        service_artifacts.append(
+            {
+                "function_id": function_id,
+                "blocks": next_filtered_blocks,
+                "current_puml": _build_service_puml(function_id, next_filtered_blocks),
+            }
+        )
 
     filtered_blocks = list(state.get("route_blocks", [])) + filtered_service_blocks
-    if state["diagram_mode"] == "service":
-        filtered_blocks = filtered_service_blocks
 
     return {
         "raw_blocks": raw_blocks,
         "filtered_blocks": filtered_blocks,
+        "service_artifacts": service_artifacts,
         "validator_passed": False,
     }
 
 
 def compress_blocks_node(state: DiagramState) -> DiagramState:
     prompt = COMPRESS_BLOCK_PROMPT.format(
-        diagram_mode=state["diagram_mode"],
-        compression_rules=_compression_rules(state["diagram_mode"]),
+        compression_rules=_compression_rules(),
         current_block_json=json.dumps(state.get("filtered_blocks", []), ensure_ascii=False, indent=2),
     )
     result = chat_json(
@@ -330,7 +277,6 @@ def compress_blocks_node(state: DiagramState) -> DiagramState:
     compressed_blocks = _ensure_dict_list(result.get("blocks"))
     compressed_blocks = _filter_generated_blocks(
         compressed_blocks,
-        diagram_mode=state["diagram_mode"],
         route_function=state["route_function"],
     )
     return {
@@ -354,7 +300,6 @@ def render_puml_node(state: DiagramState) -> DiagramState:
 def validate_puml_node(state: DiagramState) -> DiagramState:
     deterministic_error = _deterministic_validate(state["current_puml"])
     prompt = VALIDATOR_PROMPT.format(
-        diagram_mode=state["diagram_mode"],
         route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
         route_function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
         service_functions_json=json.dumps(state["service_functions"], ensure_ascii=False, indent=2),
@@ -368,11 +313,20 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
         node_name="validate_puml",
     )
     feedback = str(result.get("feedback", "")).strip()
-    validator_passed = deterministic_error is None
+    llm_is_valid = result.get("is_valid")
+    validator_passed = deterministic_error is None and llm_is_valid is True
+
+    validation_parts: list[str] = []
+    if deterministic_error:
+        validation_parts.append(deterministic_error)
+    if feedback:
+        validation_parts.append(feedback)
+    if llm_is_valid is not True:
+        validation_parts.append(f"LLM validator returned is_valid={llm_is_valid!r}")
 
     next_state: DiagramState = {
         "validator_passed": validator_passed,
-        "validation_feedback": "" if validator_passed else "\n".join(part for part in [deterministic_error, feedback] if part),
+        "validation_feedback": "" if validator_passed else "\n".join(validation_parts),
     }
     next_state["retry_count"] = 0 if validator_passed else state.get("retry_count", 0) + 1
     return next_state
@@ -382,7 +336,15 @@ def finalize_node(state: DiagramState) -> DiagramState:
     final_error = _deterministic_validate(state["current_puml"])
     if final_error:
         raise RuntimeError(f"Final diagram is invalid: {final_error}")
-    return {"current_puml": state["current_puml"]}
+    for service_artifact in state.get("service_artifacts", []):
+        service_error = _deterministic_validate(service_artifact["current_puml"])
+        if service_error:
+            function_id = service_artifact.get("function_id", "unknown")
+            raise RuntimeError(f"Service diagram {function_id} is invalid: {service_error}")
+    return {
+        "current_puml": state["current_puml"],
+        "service_artifacts": state.get("service_artifacts", []),
+    }
 
 
 def route_after_validation(state: DiagramState) -> str:
@@ -394,42 +356,32 @@ def route_after_validation(state: DiagramState) -> str:
 
 
 def _build_header(
-    diagram_mode: DiagramMode,
     route: dict[str, object],
     route_function: dict[str, object],
-    service_functions: list[dict[str, object]],
 ) -> str:
-    title = route["route_id"] if diagram_mode == "route" else _service_diagram_title(route, service_functions)
-    lines = ["@startuml", f"title {title}", "start"]
-    if diagram_mode == "route":
-        lines.extend(["", ":Request;", "note: R1"])
-        for parameter in route_function.get("parameters", []):
-            name = parameter["name"]
-            location = parameter.get("location", "body")
-            type_name = parameter.get("type")
-            lines.append(f":**{name}** = Request.{_location_label(location)}.{name};")
-            if type_name:
-                lines.append(f"note: {type_name}")
+    lines = ["@startuml", f"title {route['route_id']}", "start", "", ":Request;", "note: R1"]
+    for parameter in route_function.get("parameters", []):
+        name = parameter["name"]
+        location = parameter.get("location", "body")
+        type_name = parameter.get("type")
+        lines.append(f":**{name}** = Request.{_location_label(location)}.{name};")
+        if type_name:
+            lines.append(f"note: {type_name}")
     return "\n".join(lines).strip()
 
 
 def _build_footer(
-    diagram_mode: DiagramMode,
     route: dict[str, object],
     route_function: dict[str, object],
-    service_functions: list[dict[str, object]],
 ) -> str:
     lines = [""]
-    if diagram_mode == "route":
-        response_model = route.get("response_model")
-        if response_model:
-            lines.append(f":Build response\\nwith **{_short_name(response_model)}**;")
-        else:
-            lines.append(":Build response;")
-        lines.append("note: R2")
-        lines.append(f":HTTP {_http_status_label(route_function.get('http', {}))};")
+    response_model = route.get("response_model")
+    if response_model:
+        lines.append(f":Build response\\nwith **{_short_name(response_model)}**;")
     else:
-        lines.append(":Return;")
+        lines.append(":Build response;")
+    lines.append("note: R2")
+    lines.append(f":HTTP {_http_status_label(route_function.get('http', {}))};")
     lines.append("end")
     lines.append("@enduml")
     return "\n".join(lines).strip()
@@ -438,13 +390,12 @@ def _build_footer(
 def _filter_generated_blocks(
     blocks: list[dict[str, object]],
     *,
-    diagram_mode: DiagramMode,
     route_function: dict[str, object],
 ) -> list[dict[str, object]]:
     route_param_names = {parameter["name"] for parameter in route_function.get("parameters", [])}
     filtered: list[dict[str, object]] = []
     for block in blocks:
-        next_block = _filter_single_block(block, diagram_mode=diagram_mode, route_param_names=route_param_names)
+        next_block = _filter_single_block(block, route_param_names=route_param_names)
         if next_block is None:
             continue
         filtered.append(next_block)
@@ -454,15 +405,12 @@ def _filter_generated_blocks(
 def _filter_single_block(
     block: dict[str, object],
     *,
-    diagram_mode: DiagramMode,
     route_param_names: set[str],
 ) -> dict[str, object] | None:
     kind = block.get("kind")
     if kind == "action":
         text = str(block.get("text", "")).strip()
         if _is_route_level_duplicate(text, route_param_names):
-            return None
-        if diagram_mode == "route" and _is_technical_noise(text):
             return None
         return {"kind": "action", "text": text}
 
@@ -471,7 +419,7 @@ def _filter_single_block(
         inner = [
             item
             for item in (
-                _filter_single_block(item, diagram_mode=diagram_mode, route_param_names=route_param_names)
+                _filter_single_block(item, route_param_names=route_param_names)
                 for item in _ensure_dict_list(block.get("blocks"))
             )
             if item is not None
@@ -485,7 +433,7 @@ def _filter_single_block(
         then_blocks = [
             item
             for item in (
-                _filter_single_block(item, diagram_mode=diagram_mode, route_param_names=route_param_names)
+                _filter_single_block(item, route_param_names=route_param_names)
                 for item in _ensure_dict_list(block.get("then"))
             )
             if item is not None
@@ -493,7 +441,7 @@ def _filter_single_block(
         else_blocks = [
             item
             for item in (
-                _filter_single_block(item, diagram_mode=diagram_mode, route_param_names=route_param_names)
+                _filter_single_block(item, route_param_names=route_param_names)
                 for item in _ensure_dict_list(block.get("else"))
             )
             if item is not None
@@ -534,32 +482,10 @@ def _is_route_level_duplicate(text: str, route_param_names: set[str]) -> bool:
     return False
 
 
-def _is_technical_noise(text: str) -> bool:
-    lowered = text.lower()
-    noise_markers = (
-        "timestamp",
-        "created_at",
-        "updated_at",
-        "current time",
-        "get db session",
-        "commit db",
-        "commit changes",
-        "prepare",
-        "assign temporary",
-    )
-    return any(marker in lowered for marker in noise_markers)
-
-
-def _compression_rules(diagram_mode: DiagramMode) -> str:
-    if diagram_mode == "route":
-        return (
-            "- Удаляй мелкие технические шаги.\n"
-            "- Схлопывай соседние preparation actions.\n"
-            "- Оставляй только бизнес-значимые действия, DB write/read, entity/model creation, ошибки."
-        )
+def _compression_rules() -> str:
     return (
-        "- Сжимай умеренно.\n"
-        "- Оставляй больше деталей функции.\n"
+        "- Удаляй мелкие технические шаги.\n"
+        "- Схлопывай соседние preparation actions.\n"
         "- Не удаляй DB write/read, entity/model creation, ошибки."
     )
 
@@ -660,10 +586,10 @@ def _short_name(value: object) -> str:
     return value.rsplit(".", maxsplit=1)[-1]
 
 
-def _service_diagram_title(route: dict[str, object], service_functions: list[dict[str, object]]) -> str:
-    if len(service_functions) == 1:
-        return str(service_functions[0].get("function_id", route["route_id"]))
-    return f"{route['route_id']} services"
+def _build_service_puml(function_id: str, blocks: list[dict[str, object]]) -> str:
+    header_fragment = "\n".join(["@startuml", f"title {function_id}", "start"])
+    footer_fragment = "\n".join([":Return;", "end", "@enduml"])
+    return _assemble_puml(header_fragment, _render_blocks(blocks), footer_fragment)
 
 
 def _sanitize_action_text(text: str) -> str:
@@ -698,22 +624,5 @@ def _diff_text(old: str, new: str) -> str:
             new.splitlines(keepends=True),
             fromfile="before.puml",
             tofile="after.puml",
-        )
-    )
-
-
-def _is_hard_feedback(feedback: str) -> bool:
-    lowered = feedback.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "сломанный синтаксис",
-            "broken syntax",
-            "duplicat",
-            "helper",
-            "смешаны",
-            "missing",
-            "unsupported",
-            "неверный if",
         )
     )

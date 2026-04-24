@@ -22,7 +22,5 @@ services:
         "--input",
         "input/synthetic_data.json",
         "--outdir",
-        "output",
-        "--diagram-mode",
-        "route"
+        "output"
       ]

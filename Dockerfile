@@ -18,4 +18,4 @@ COPY . .
 
 RUN mkdir -p /app/output /app/logs
 
-CMD ["python", "-m", "src.main", "--input", "input/synthetic_data.json", "--outdir", "output", "--diagram-mode", "route"]
+CMD ["python", "-m", "src.main", "--input", "input/synthetic_data.json", "--outdir", "output"]

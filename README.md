@@ -8,9 +8,7 @@
 - принимает JSON IR как вход
 - собирает workflow генерации через `LangGraph`
 - генерирует `PlantUML activity`-диаграммы
-- поддерживает два режима (пока работают похоже):
-  - `route` — диаграмма роута, без погружения в технические детали
-  - `service` — диаграмма роута, с более подробным кодом сервисных функции
+- генерирует общую диаграмму роута и отдельные `.puml`-артефакты для каждой сервисной функции
 - валидирует результат и при необходимости повторяет генерацию
 
 ## Визуализация графа
@@ -47,8 +45,7 @@ make generate
 ```bash
 python -m src.main \
   --input input/synthetic_data.json \
-  --outdir output \
-  --diagram-mode route
+  --outdir output
 ```
 
 ### Запуск через Docker (не пробовал)
@@ -63,7 +60,7 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
 docker compose up --build
 docker compose run --rm puml-gen \
-  python -m src.main --input input/synthetic_data.json --outdir output --diagram-mode service
+  python -m src.main --input input/synthetic_data.json --outdir output
 ```
 
 
@@ -75,7 +72,7 @@ docker compose run --rm puml-gen \
 
 ## Выходные данные
 
-На выходе проект создаёт файлы `.puml`, которые можно дальше рендерить в изображения или использовать как артефакты документации.
+На выходе проект создаёт общий файл роута `{route_slug}.activity.puml` и service-файлы `{route_slug}.{function_id_slug}.activity.puml`, которые можно дальше рендерить в изображения или использовать как артефакты документации.
 
 ## Технологии
 
