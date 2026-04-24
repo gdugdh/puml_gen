@@ -8,7 +8,6 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.graph import END, START, StateGraph
 
 from src.llm import LLMConfig, chat_json
-from src.logging_utils import log_event
 
 
 DiagramKind = Literal["route", "service", "merge"]
@@ -16,7 +15,7 @@ DiagramKind = Literal["route", "service", "merge"]
 
 FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
     """
-Ты превращаешь IR одной route-функции в строгий JSON-блок.
+Ты превращаешь компактный IR одной route-функции в строгий JSON-блок.
 
 Формат ответа:
 {{
@@ -35,21 +34,23 @@ FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
 5. Если блок заканчивается raise, добавь сразу после него {{"kind":"action","text":"end"}}.
 6. Если блок заканчивается return, добавь сразу после него {{"kind":"action","text":"stop"}}.
 7. end и stop пиши только как action.text ровно "end" или "stop".
+8. Если есть feedback, исправь именно описанную проблему и верни полный JSON заново, а не частичный diff.
 
-route:
-{route_json}
+# Инструкция
+{instruction}
 
-route_function:
-{function_json}
+# Контекст
+<route_context>
+{route_context_json}
+</route_context>
 
-feedback:
-{feedback}
+{feedback_section}
 """.strip()
 )
 
 FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
     """
-Ты превращаешь IR одной функции в строгую последовательность блоков в JSON.
+Ты превращаешь компактный IR одной service-функции в строгую последовательность блоков в JSON.
 
 Формат ответа:
 {{
@@ -72,12 +73,17 @@ FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
 gameIds = множество ключей set<key> из donateHubGames по полю id
 wataComissionRub = price / wataRateRubToUsdt * (terminalComissionInPercent / 100)
 get_password_hash(user.password)
+9. Если есть feedback, исправь именно описанную проблему и верни полный JSON заново, а не частичный diff.
 
-IR функции:
-{function_json}
+# Инструкция
+{instruction}
 
-feedback:
-{feedback}
+# Контекст
+<service_function_context>
+{function_context_json}
+</service_function_context>
+
+{feedback_section}
 """.strip()
 )
 
@@ -86,6 +92,9 @@ COMPRESS_BLOCK_PROMPT = PromptTemplate.from_template(
 Ты сжимаешь JSON-блок activity-диаграммы.
 Ответ только JSON в том же формате:
 {{"blocks":[...]}}
+
+# Инструкция
+{instruction}
 
 Правила компрессии:
 {compression_rules}
@@ -97,6 +106,10 @@ COMPRESS_BLOCK_PROMPT = PromptTemplate.from_template(
 4. Удаляй или схлопывай мелкие технические шаги без бизнес-смысла.
 5. Не добавляй новые блоки, которых не было в исходном JSON.
 6. Не удаляй и не перемещай action с text "end" или "stop".
+7. Если в feedback указано, что потерян service return, route response, success completion, error branch, service-call или terminal block, сохрани эти элементы в выходном JSON и не схлопывай их.
+8. Если feedback требует явно показать завершение успешного потока, не удаляй return/stop и не заменяй их на более краткую формулировку.
+
+{feedback_section}
 
 current_block_json:
 {current_block_json}
@@ -105,39 +118,43 @@ current_block_json:
 
 VALIDATOR_PROMPT = PromptTemplate.from_template(
     """
-Ты проверяешь уже собранную PlantUML activity-диаграмму.
-Ответ только JSON:
-{{"is_valid": true, "feedback": ""}}
+Ты валидируешь уже собранную PlantUML activity-диаграмму и возвращаешь точный диагноз.
 
-Правила:
+Ответ только JSON:
+{{"is_valid": true, "feedback": "", "suggested_fix": ""}}
+
+Требования к ответу:
 1. Если deterministic_error не "none", верни is_valid=false и feedback с этой ошибкой.
-2. Если deterministic_error == "none", считай синтаксис PlantUML корректным.
-3. Общая диаграмма ожидаемо содержит route-shell (Request/HTTP/Build response) и service actions вместе. Это не ошибка.
+2. Если deterministic_error == "none", оценивай только текущую диаграмму и только по переданному context.
+3. Общая диаграмма merge ожидаемо содержит route-shell (Request/HTTP/Build response) и service actions вместе. Это не ошибка.
 4. end в error-ветке и stop в успешном конце являются ожидаемыми PlantUML terminal blocks.
 5. Не проверяй область видимости переменных: диаграмма не исполняемый код, поэтому {{e}} в тексте logging.error допустим.
-6. Верни is_valid=false только если можешь указать конкретную потерянную важную ветку или конкретный дублирующий/мусорный фрагмент из diagram.
-7. feedback всегда строка, не список.
-8. Не копируй эти правила в feedback.
+6. Будь максимально мягким и непредирчивым. Если сомневаешься, верни is_valid=true.
+7. Нельзя отклонять диаграмму из-за недостаточной детализации, краткости формулировок, стиля или отсутствия "narrative bridge" между service result и route response, если общий поток уже понятен.
+8. Нельзя требовать одновременно и service return, и route response, если диаграмма уже показывает завершение успешного потока другим корректным способом.
+9. Верни is_valid=false только в одном из следующих случаев:
+   - в context есть вызов service-функции, а в diagram вообще нет никакого service-call шага;
+   - в service context есть error branch, а в diagram осталась только success branch и error handling действительно потерян;
+   - в context есть явный return токена или другого результата, а в diagram нет ни service return, ни route response, ни другого явного завершения успешного потока.
+10. Если ни один из этих случаев не доказан по diagram и context, верни is_valid=true.
+11. feedback всегда строка, не список. В feedback кратко опиши проблему и укажи фрагмент diagram/context, на который опираешься.
+12. suggested_fix всегда строка, не список. Если is_valid=false, дай короткую инструкцию, что нужно исправить при следующей генерации. Если is_valid=true, верни пустую строку.
+13. Не копируй эти правила в feedback или suggested_fix.
 
-Не придирайся к мелкому стилю.
+Не придирайся к не точностям и стилю.
 
-diagram_kind:
-{diagram_kind}
+# Диаграмма
+diagram_kind: {diagram_kind}
 
-route:
-{route_json}
-
-route_function:
-{route_function_json}
-
-service_functions:
-{service_functions_json}
-
-diagram:
+<diagram>
 {current_puml}
+</diagram>
 
-deterministic_error:
-{deterministic_error}
+<context>
+{diagram_context_json}
+</context>
+
+deterministic_error: {deterministic_error}
 """.strip()
 )
 
@@ -229,11 +246,6 @@ def build_workflow():
 
 
 def init_workflow_node(state: DiagramState) -> DiagramState:
-    _log_workflow_node(
-        "init_workflow",
-        state,
-        service_functions=len(state.get("service_functions", [])),
-    )
     return {
         "current_diagram_kind": "route",
         "current_service_function": None,
@@ -256,15 +268,15 @@ def init_workflow_node(state: DiagramState) -> DiagramState:
 
 
 def generate_route_blocks_node(state: DiagramState) -> DiagramState:
-    _log_workflow_node(
-        "generate_route_blocks:start",
-        state,
-        feedback_present=bool(state.get("validation_feedback")),
-    )
+    feedback = state.get("validation_feedback", "")
     prompt = FUNCTION_BLOCK_PROMPT.format(
-        route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
-        function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
-        feedback=state.get("validation_feedback", ""),
+        instruction=_route_generation_instruction(feedback),
+        route_context_json=json.dumps(
+            _route_prompt_context(state["route"], state["route_function"]),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        feedback_section=_feedback_section(feedback),
     )
     result = chat_json(
         state["llm_config"],
@@ -276,11 +288,6 @@ def generate_route_blocks_node(state: DiagramState) -> DiagramState:
         _ensure_dict_list(result.get("blocks")),
         route_function=state["route_function"],
         append_stop=False,
-    )
-    _log_workflow_node(
-        "generate_route_blocks:end",
-        state,
-        route_blocks=len(route_blocks),
     )
     return {
         "current_diagram_kind": "route",
@@ -298,12 +305,6 @@ def check_service_functions_node(state: DiagramState) -> DiagramState:
     service_functions = state.get("service_functions", [])
     service_index = state.get("service_index", 0)
     if service_index >= len(service_functions):
-        _log_workflow_node(
-            "check_service_functions",
-            state,
-            remaining=0,
-            next_node="merge_puml",
-        )
         return {
             "current_diagram_kind": "merge",
             "current_service_function": None,
@@ -314,13 +315,6 @@ def check_service_functions_node(state: DiagramState) -> DiagramState:
 
     service_function = service_functions[service_index]
     function_id = str(service_function.get("function_id", "unknown"))
-    _log_workflow_node(
-        "check_service_functions",
-        state,
-        remaining=len(service_functions) - service_index,
-        function_id=function_id,
-        next_node="generate_service_blocks",
-    )
     return {
         "current_diagram_kind": "service",
         "current_service_function": service_function,
@@ -343,15 +337,15 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
         raise RuntimeError("No current service function selected")
 
     function_id = str(service_function.get("function_id", "unknown"))
-    _log_workflow_node(
-        "generate_service_blocks:start",
-        state,
-        function_id=function_id,
-        feedback_present=bool(state.get("validation_feedback")),
-    )
+    feedback = state.get("validation_feedback", "")
     prompt = FUNCTION_SERVICE_BLOCK_PROMPT.format(
-        function_json=json.dumps(service_function, ensure_ascii=False, indent=2),
-        feedback=state.get("validation_feedback", ""),
+        instruction=_service_generation_instruction(feedback),
+        function_context_json=json.dumps(
+            _service_prompt_context(service_function),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        feedback_section=_feedback_section(feedback),
     )
     result = chat_json(
         state["llm_config"],
@@ -364,13 +358,6 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
         raw_blocks,
         route_function=state["route_function"],
         append_stop=False,
-    )
-    _log_workflow_node(
-        "generate_service_blocks:end",
-        state,
-        function_id=function_id,
-        raw_blocks=len(raw_blocks),
-        filtered_blocks=len(filtered_blocks),
     )
     return {
         "current_diagram_kind": "service",
@@ -385,31 +372,23 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
 
 def compress_blocks_node(state: DiagramState) -> DiagramState:
     input_blocks = state.get("current_blocks", [])
-    _log_workflow_node(
-        "compress_blocks:start",
-        state,
-        input_blocks=len(input_blocks),
-        diagram_kind=state.get("current_diagram_kind"),
-    )
+    feedback = state.get("validation_feedback", "")
     prompt = COMPRESS_BLOCK_PROMPT.format(
+        instruction=_compression_instruction(feedback),
         compression_rules=_compression_rules(),
+        feedback_section=_feedback_section(feedback),
         current_block_json=json.dumps(input_blocks, ensure_ascii=False, indent=2),
     )
     result = chat_json(
         state["llm_config"],
         system_prompt="Ты сжимаешь JSON-блоки и отвечаешь только JSON.",
         user_prompt=prompt,
-        node_name="compress_blocks",
+        node_name="compress",
     )
     compressed_blocks = _prepare_generated_blocks(
         _ensure_dict_list(result.get("blocks")),
         route_function=state["route_function"],
         append_stop=True,
-    )
-    _log_workflow_node(
-        "compress_blocks:end",
-        state,
-        compressed_blocks=len(compressed_blocks),
     )
     return {
         "compressed_blocks": compressed_blocks,
@@ -430,14 +409,6 @@ def render_puml_node(state: DiagramState) -> DiagramState:
         current_puml = _build_route_puml(state["route"], state["route_function"], blocks)
 
     body_fragment = _render_blocks(blocks)
-    _log_workflow_node(
-        "render_puml",
-        state,
-        diagram_kind=diagram_kind,
-        body_lines=len(body_fragment.splitlines()) if body_fragment else 0,
-        puml_lines=len(current_puml.splitlines()),
-        diff_lines=len(_diff_text(previous_puml, current_puml).splitlines()),
-    )
     return {
         "body_fragment": body_fragment,
         "current_puml": current_puml,
@@ -447,19 +418,16 @@ def render_puml_node(state: DiagramState) -> DiagramState:
 
 
 def validate_puml_node(state: DiagramState) -> DiagramState:
-    _log_workflow_node(
-        "validate_puml:start",
-        state,
-        diagram_kind=state.get("current_diagram_kind"),
-        puml_lines=len(state["current_puml"].splitlines()),
-    )
     deterministic_error = _deterministic_validate(state["current_puml"])
+    diagram_kind = state.get("current_diagram_kind", "route")
     prompt = VALIDATOR_PROMPT.format(
-        diagram_kind=state.get("current_diagram_kind", "route"),
-        route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
-        route_function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
-        service_functions_json=json.dumps(state["service_functions"], ensure_ascii=False, indent=2),
+        diagram_kind=diagram_kind,
         current_puml=state["current_puml"],
+        diagram_context_json=json.dumps(
+            _validator_prompt_context(state, diagram_kind=diagram_kind),
+            ensure_ascii=False,
+            indent=2,
+        ),
         deterministic_error=deterministic_error or "none",
     )
     result = chat_json(
@@ -469,6 +437,7 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
         node_name="validate_puml",
     )
     feedback = _feedback_to_text(result.get("feedback"))
+    suggested_fix = _feedback_to_text(result.get("suggested_fix"))
     llm_is_valid = result.get("is_valid")
     validator_passed = deterministic_error is None and llm_is_valid is True
 
@@ -477,6 +446,8 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
         validation_parts.append(deterministic_error)
     if feedback:
         validation_parts.append(feedback)
+    if suggested_fix:
+        validation_parts.append(f"Suggested fix: {suggested_fix}")
     if llm_is_valid is not True:
         validation_parts.append(f"LLM validator returned is_valid={llm_is_valid!r}")
 
@@ -485,15 +456,6 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
         "validation_feedback": "" if validator_passed else "\n".join(validation_parts),
     }
     next_state["retry_count"] = 0 if validator_passed else state.get("retry_count", 0) + 1
-    _log_workflow_node(
-        "validate_puml:end",
-        state,
-        deterministic_error=deterministic_error,
-        llm_is_valid=llm_is_valid,
-        validator_passed=validator_passed,
-        next_retry_count=next_state["retry_count"],
-        feedback=next_state["validation_feedback"],
-    )
     return next_state
 
 
@@ -505,14 +467,6 @@ def save_puml_node(state: DiagramState) -> DiagramState:
         "blocks": state.get("current_blocks", []),
         "current_puml": state["current_puml"],
     }
-    _log_workflow_node(
-        "save_puml",
-        state,
-        diagram_kind=diagram_kind,
-        function_id=function_id,
-        puml_lines=len(state["current_puml"].splitlines()),
-    )
-
     if diagram_kind == "route":
         return {
             "route_artifact": artifact,
@@ -543,13 +497,6 @@ def merge_puml_node(state: DiagramState) -> DiagramState:
     service_artifacts = state.get("service_artifacts", [])
     merged_blocks = _merge_blocks(route_blocks, service_artifacts)
     current_puml = _build_route_puml(state["route"], state["route_function"], merged_blocks)
-    _log_workflow_node(
-        "merge_puml",
-        state,
-        route_blocks=len(route_blocks),
-        service_artifacts=len(service_artifacts),
-        merged_blocks=len(merged_blocks),
-    )
     return {
         "current_diagram_kind": "merge",
         "current_service_function": None,
@@ -563,11 +510,6 @@ def merge_puml_node(state: DiagramState) -> DiagramState:
 
 
 def finalize_node(state: DiagramState) -> DiagramState:
-    _log_workflow_node(
-        "finalize:start",
-        state,
-        service_artifacts=len(state.get("service_artifacts", [])),
-    )
     final_error = _deterministic_validate(state["current_puml"])
     if final_error:
         raise RuntimeError(f"Final diagram is invalid: {final_error}")
@@ -586,25 +528,20 @@ def finalize_node(state: DiagramState) -> DiagramState:
 def route_after_validation(state: DiagramState) -> str:
     diagram_kind = state.get("current_diagram_kind", "route")
     if state.get("validator_passed", False):
-        _log_workflow_node("route_after_validation", state, next_node="save_puml")
         return "save"
-    if state.get("retry_count", 0) >= state.get("max_retries", 2):
-        _log_workflow_node("route_after_validation", state, next_node="raise")
+    if state.get("retry_count", 0) > state.get("max_retries", 3):
         raise RuntimeError(f"Validation failed: {state.get('validation_feedback', '')}")
     next_node = {
         "route": "retry_route",
         "service": "retry_service",
         "merge": "retry_merge",
     }.get(diagram_kind, "retry_route")
-    _log_workflow_node("route_after_validation", state, next_node=next_node)
     return next_node
 
 
 def route_after_save(state: DiagramState) -> str:
     if state.get("current_diagram_kind") == "merge":
-        _log_workflow_node("route_after_save", state, next_node="finalize")
         return "finalize"
-    _log_workflow_node("route_after_save", state, next_node="check_service_functions")
     return "check_services"
 
 
@@ -1225,6 +1162,128 @@ def _assemble_puml(header_fragment: str, body_fragment: str, footer_fragment: st
     return "\n".join(parts).strip() + "\n"
 
 
+def _route_generation_instruction(feedback: str) -> str:
+    if feedback.strip():
+        return (
+            "Ты исправляешь предыдущий невалидный JSON route-блоков. "
+            "Используй feedback как список конкретных ошибок, сохрани смысл IR и выдай полный исправленный JSON заново."
+        )
+    return "Ты превращаешь IR route-функции в корректный JSON блоков activity-диаграммы."
+
+
+def _service_generation_instruction(feedback: str) -> str:
+    if feedback.strip():
+        return (
+            "Ты исправляешь предыдущий невалидный JSON service-блоков. "
+            "Используй feedback как список конкретных ошибок, сохрани смысл IR функции и выдай полный исправленный JSON заново."
+        )
+    return "Ты превращаешь IR service-функции в корректный JSON блоков activity-диаграммы."
+
+
+def _compression_instruction(feedback: str) -> str:
+    if feedback.strip():
+        return (
+            "Ты исправляешь предыдущую неудачную компрессию. "
+            "Строго учитывай feedback валидатора. Если в feedback сказано сохранить или явно показать шаг, ветку, service call, "
+            "service return, route response, success completion, error handling, end или stop, не удаляй, не схлопывай и не маскируй их."
+        )
+    return "Ты аккуратно сжимаешь JSON-блок, не теряя важный control flow и terminal steps."
+
+
+def _feedback_section(feedback: str) -> str:
+    normalized = feedback.strip()
+    if not normalized:
+        return ""
+    return "<feedback>\n" + normalized + "\n</feedback>"
+
+
+def _route_prompt_context(
+    route: dict[str, object],
+    route_function: dict[str, object],
+) -> dict[str, object]:
+    http_meta = route_function.get("http", {})
+    return {
+        "route_id": route.get("route_id"),
+        "http": {
+            "method": http_meta.get("method"),
+            "path": http_meta.get("path"),
+            "status_code": http_meta.get("status_code"),
+        },
+        "signature": route_function.get("signature"),
+        "parameters": _prompt_parameters(route_function),
+        "steps": _prompt_steps(route_function),
+    }
+
+
+def _service_prompt_context(function: dict[str, object]) -> dict[str, object]:
+    return {
+        "function_id": function.get("function_id"),
+        "signature": function.get("signature"),
+        "steps": _prompt_steps(function),
+    }
+
+
+def _validator_prompt_context(
+    state: DiagramState,
+    *,
+    diagram_kind: DiagramKind,
+) -> dict[str, object]:
+    if diagram_kind == "service":
+        service_function = state.get("current_service_function")
+        if isinstance(service_function, dict):
+            return {
+                "service_function": _service_prompt_context(service_function),
+            }
+        return {
+            "service_function": {
+                "function_id": state.get("current_function_id", "unknown"),
+            }
+        }
+    if diagram_kind == "merge":
+        return {
+            "route": _route_prompt_context(state["route"], state["route_function"]),
+            "service_functions": [
+                _service_prompt_context(function)
+                for function in state.get("service_functions", [])
+            ],
+        }
+    return {
+        "route": _route_prompt_context(state["route"], state["route_function"]),
+    }
+
+
+def _prompt_parameters(function: dict[str, object]) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for parameter in function.get("parameters", []):
+        if not isinstance(parameter, dict):
+            continue
+        result.append(
+            {
+                "name": parameter.get("name"),
+                "location": parameter.get("location"),
+                "type": parameter.get("type"),
+            }
+        )
+    return result
+
+
+def _prompt_steps(function: dict[str, object]) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for step in function.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        compact_step = {
+            "kind": step.get("kind"),
+            "source": step.get("source"),
+        }
+        if not compact_step["source"]:
+            for key in ("condition", "target", "value", "result"):
+                if step.get(key) is not None:
+                    compact_step[key] = step.get(key)
+        result.append({key: value for key, value in compact_step.items() if value is not None})
+    return result
+
+
 def _location_label(location: str) -> str:
     mapping = {
         "body": "Body",
@@ -1377,19 +1436,3 @@ def _diff_text(old: str, new: str) -> str:
             tofile="after.puml",
         )
     )
-
-
-def _log_workflow_node(node_name: str, state: DiagramState, **payload: object) -> None:
-    try:
-        route = state.get("route", {})
-        log_event(
-            "workflow_node",
-            {
-                "node_name": node_name,
-                "route_id": route.get("route_id") if isinstance(route, dict) else None,
-                "retry_count": state.get("retry_count", 0),
-                **payload,
-            },
-        )
-    except Exception:
-        pass

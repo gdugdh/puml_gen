@@ -9,6 +9,12 @@ from src.workflow import _filter_generated_blocks
 from src.workflow import _merge_blocks
 from src.workflow import _prepare_generated_blocks
 from src.workflow import _render_blocks
+from src.workflow import _route_prompt_context
+from src.workflow import _service_prompt_context
+from src.workflow import _validator_prompt_context
+from src.workflow import compress_blocks_node
+from src.workflow import generate_service_blocks_node
+from src.workflow import route_after_validation
 from src.workflow import validate_puml_node
 
 
@@ -35,6 +41,28 @@ def test_validate_puml_node_rejects_llm_is_valid_false(monkeypatch):
     assert "is_valid=False" in result["validation_feedback"]
 
 
+def test_validate_puml_node_includes_suggested_fix_and_resets_retry_count(monkeypatch):
+    def fake_chat_json(*args, **kwargs):
+        return {"is_valid": True, "feedback": "", "suggested_fix": ""}
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    state = {
+        "route": {"route_id": "POST /auth"},
+        "route_function": {"function_id": "handler", "parameters": []},
+        "service_functions": [],
+        "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+        "current_puml": "@startuml\ntitle POST /auth\nstart\n:Do work;\nstop\n@enduml\n",
+        "retry_count": 3,
+    }
+
+    result = validate_puml_node(state)
+
+    assert result["validator_passed"] is True
+    assert result["retry_count"] == 0
+    assert result["validation_feedback"] == ""
+
+
 def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeypatch):
     input_path = tmp_path / "input.json"
     output_dir = tmp_path / "output"
@@ -48,7 +76,7 @@ def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeyp
             assert "route_function:" not in user_prompt
             assert "\nroute:" not in user_prompt
             return {"blocks": [{"kind": "action", "text": "user = User from payload"}]}
-        if node_name == "compress_blocks":
+        if node_name == "compress":
             return {"blocks": [{"kind": "action", "text": "Persist user"}]}
         if node_name == "validate_puml":
             return {"is_valid": True, "feedback": ""}
@@ -279,6 +307,183 @@ def test_russian_route_shell_actions_are_filtered_from_route_blocks():
     assert "Вернуть ответ с кодом 201" not in body
     assert "Вызвать сервис для регистрации пользователя" in body
     assert "Обработать ошибку регистрации" in body
+
+
+def test_route_and_service_prompt_contexts_are_compact():
+    route = {"route_id": "POST /auth"}
+    route_function = {
+        "function_id": "src.auth.controller.register_user",
+        "signature": "async def register_user(db, payload)",
+        "http": {"method": "POST", "path": "/auth", "status_code": 201},
+        "parameters": [
+            {"name": "db", "location": "dependency", "type": "DbSession", "provider": "src.database.core.get_db"},
+            {"name": "payload", "location": "body", "type": "RegisterUserRequest", "provider": None},
+        ],
+        "steps": [
+            {"kind": "receive_request", "source": "register_user(db, payload)", "module": "src.auth.controller"},
+            {"kind": "call", "source": "service.register_user(db, payload)", "target": "src.auth.service.register_user"},
+        ],
+        "file": "controller.py",
+        "edges": [{"from": "a", "to": "b"}],
+    }
+    service_function = {
+        "function_id": "src.auth.service.register_user",
+        "signature": "def register_user(db, payload)",
+        "steps": [
+            {"kind": "call", "source": "db.add(user_model)", "module": "src.auth.service"},
+            {"kind": "return", "source": "return None", "value": "None"},
+        ],
+        "package": "src.auth",
+        "file": "service.py",
+        "edges": [{"from": "a", "to": "b"}],
+    }
+
+    route_context = _route_prompt_context(route, route_function)
+    service_context = _service_prompt_context(service_function)
+
+    assert route_context == {
+        "route_id": "POST /auth",
+        "http": {"method": "POST", "path": "/auth", "status_code": 201},
+        "signature": "async def register_user(db, payload)",
+        "parameters": [
+            {"name": "db", "location": "dependency", "type": "DbSession"},
+            {"name": "payload", "location": "body", "type": "RegisterUserRequest"},
+        ],
+        "steps": [
+            {"kind": "receive_request", "source": "register_user(db, payload)"},
+            {"kind": "call", "source": "service.register_user(db, payload)"},
+        ],
+    }
+    assert service_context == {
+        "function_id": "src.auth.service.register_user",
+        "signature": "def register_user(db, payload)",
+        "steps": [
+            {"kind": "call", "source": "db.add(user_model)"},
+            {"kind": "return", "source": "return None"},
+        ],
+    }
+
+
+def test_validator_prompt_context_depends_on_diagram_kind():
+    state = {
+        "route": {"route_id": "POST /auth"},
+        "route_function": {
+            "signature": "async def register_user(db, payload)",
+            "http": {"method": "POST", "path": "/auth", "status_code": 201},
+            "parameters": [],
+            "steps": [{"kind": "call", "source": "service.register_user(db, payload)"}],
+        },
+        "service_functions": [
+            {
+                "function_id": "src.auth.service.register_user",
+                "signature": "def register_user(db, payload)",
+                "steps": [{"kind": "return", "source": "return None"}],
+            }
+        ],
+        "current_service_function": {
+            "function_id": "src.auth.service.register_user",
+            "signature": "def register_user(db, payload)",
+            "steps": [{"kind": "return", "source": "return None"}],
+        },
+    }
+
+    route_context = _validator_prompt_context(state, diagram_kind="route")
+    service_context = _validator_prompt_context(state, diagram_kind="service")
+    merge_context = _validator_prompt_context(state, diagram_kind="merge")
+
+    assert set(route_context) == {"route"}
+    assert set(service_context) == {"service_function"}
+    assert set(merge_context) == {"route", "service_functions"}
+
+
+def test_generate_service_blocks_prompt_uses_feedback_as_instruction(monkeypatch):
+    captured_prompt = {}
+
+    def fake_chat_json(*args, **kwargs):
+        captured_prompt["text"] = kwargs["user_prompt"]
+        return {"blocks": [{"kind": "action", "text": "db.add(user_model)"}]}
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    state = {
+        "route_function": {"parameters": []},
+        "current_service_function": {
+            "function_id": "src.auth.service.register_user",
+            "signature": "def register_user(db, payload)",
+            "steps": [
+                {"kind": "call", "source": "db.add(user_model)", "module": "src.auth.service"},
+                {"kind": "return", "source": "return None"},
+            ],
+            "module": "src.auth.service",
+            "file": "service.py",
+        },
+        "validation_feedback": "Missing success stop",
+        "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+    }
+
+    generate_service_blocks_node(state)
+
+    assert "исправляешь предыдущий невалидный JSON service-блоков" in captured_prompt["text"]
+    assert "Missing success stop" in captured_prompt["text"]
+    assert '"function_id": "src.auth.service.register_user"' in captured_prompt["text"]
+    assert '"signature": "def register_user(db, payload)"' in captured_prompt["text"]
+    assert '"module"' not in captured_prompt["text"]
+    assert '"file"' not in captured_prompt["text"]
+
+
+def test_compress_blocks_prompt_uses_feedback_only_when_present(monkeypatch):
+    prompts = []
+
+    def fake_chat_json(*args, **kwargs):
+        prompts.append(kwargs["user_prompt"])
+        return {"blocks": [{"kind": "action", "text": "db.add(user_model)"}, {"kind": "action", "text": "stop"}]}
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    base_state = {
+        "route_function": {"parameters": []},
+        "current_blocks": [
+            {"kind": "action", "text": "db.add(user_model)"},
+            {"kind": "action", "text": "return None"},
+            {"kind": "action", "text": "stop"},
+        ],
+        "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+    }
+
+    compress_blocks_node(base_state)
+    compress_blocks_node({**base_state, "validation_feedback": "Добавьте явное завершение успешного потока."})
+
+    assert "исправляешь предыдущую неудачную компрессию" not in prompts[0]
+    assert "<feedback>" not in prompts[0]
+    assert "исправляешь предыдущую неудачную компрессию" in prompts[1]
+    assert "Добавьте явное завершение успешного потока." in prompts[1]
+    assert "не удаляй, не схлопывай и не маскируй" in prompts[1]
+
+
+def test_route_after_validation_allows_three_retries_and_raises_on_fourth():
+    assert route_after_validation(
+        {
+            "current_diagram_kind": "service",
+            "validator_passed": False,
+            "retry_count": 3,
+            "max_retries": 3,
+        }
+    ) == "retry_service"
+
+    try:
+        route_after_validation(
+            {
+                "current_diagram_kind": "service",
+                "validator_passed": False,
+                "retry_count": 4,
+                "max_retries": 3,
+                "validation_feedback": "still broken",
+            }
+        )
+    except RuntimeError as error:
+        assert "still broken" in str(error)
+    else:
+        raise AssertionError("expected RuntimeError on fourth failed validation")
 
 
 def _small_ir() -> dict[str, object]:

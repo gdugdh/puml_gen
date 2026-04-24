@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from src.llm import load_config
-from src.logging_utils import log_event
-from src.logging_utils import log_run_start
 from src.workflow import build_workflow
 
 
@@ -21,15 +19,8 @@ def gen_png_graph(app_obj: Any, name_photo: str = "graph.png") -> None:
     try:
         with open(name_photo, "wb") as f:
             f.write(app_obj.get_graph().draw_mermaid_png())
-    except Exception as error:
-        log_event(
-            "graph_png_generation_failed",
-            {
-                "path": name_photo,
-                "error_type": type(error).__name__,
-                "error": str(error),
-            },
-        )
+    except Exception:
+        pass
 
 
 def generate_from_file(
@@ -39,14 +30,6 @@ def generate_from_file(
     data = json.loads(Path(input_path).read_text(encoding="utf-8"))
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    log_run_start(
-        "synthetic_generator_with_ML.generate_from_file",
-        {
-            "input_path": str(input_path),
-            "output_dir": str(output_dir),
-        },
-    )
 
     llm_config = load_config()
     functions_by_id = {function["function_id"]: function for function in data.get("functions", [])}
@@ -63,7 +46,7 @@ def generate_from_file(
             "route_function": route_function,
             "service_functions": service_functions,
             "llm_config": llm_config,
-            "max_retries": 2,
+            "max_retries": 3,
         }
         result = workflow.invoke(state)
         route_slug = _route_slug(str(route["route_id"]))

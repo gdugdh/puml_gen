@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import traceback
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,12 +58,8 @@ def chat_json(
         method="POST",
     )
     log_event(
-        "llm_request",
+        f"{node_name} llm request",
         {
-            "node_name": node_name,
-            "model": config.model,
-            "system_prompt": system_prompt,
-            "user_prompt": user_prompt,
             "payload": payload,
         },
     )
@@ -74,25 +69,13 @@ def chat_json(
         content = body["choices"][0]["message"]["content"]
         parsed = json.loads(content)
         log_event(
-            "llm_response",
+            f"{node_name} llm response",
             {
-                "node_name": node_name,
-                "raw_body": body,
-                "raw_content": content,
                 "parsed_content": parsed,
             },
         )
         return parsed
-    except Exception as error:
-        log_event(
-            "llm_error",
-            {
-                "node_name": node_name,
-                "error_type": type(error).__name__,
-                "error": str(error),
-                "traceback": traceback.format_exc(),
-            },
-        )
+    except Exception:
         raise
 
 
