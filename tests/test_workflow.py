@@ -5,6 +5,9 @@ from pathlib import Path
 
 from src.generator import generate_from_file
 from src.llm import LLMConfig
+from src.workflow import _deterministic_validate
+from src.workflow import _filter_generated_blocks
+from src.workflow import _render_blocks
 from src.workflow import validate_puml_node
 
 
@@ -71,6 +74,50 @@ def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeyp
     assert ":user = User from payload;" in service_puml
     assert ":Return;" in service_puml
     assert service_puml.endswith("end\n@enduml\n")
+
+
+def test_control_flow_noise_does_not_break_puml_validation():
+    blocks = _filter_generated_blocks(
+        [
+            {"kind": "action", "text": "Start try block for user registration."},
+            {"kind": "action", "text": "Начать блок try для обработки ошибок."},
+            {
+                "kind": "if",
+                "condition": "An exception occurs during the try block",
+                "then": [{"kind": "action", "text": "Log error"}],
+            },
+        ],
+        route_function={"parameters": []},
+    )
+
+    body = _render_blocks(blocks)
+    puml = f"@startuml\ntitle Test\nstart\n{body}\nend\n@enduml\n"
+
+    assert "Start try block" not in body
+    assert "Начать блок try" not in body
+    assert "during the try block" not in body
+    assert "during execution" in body
+    assert _deterministic_validate(puml) is None
+
+
+def test_else_only_if_is_rendered_as_non_empty_then_branch():
+    blocks = _filter_generated_blocks(
+        [
+            {
+                "kind": "if",
+                "condition": "User registration is successful",
+                "then": [],
+                "else": [{"kind": "action", "text": "Handle registration failure"}],
+            }
+        ],
+        route_function={"parameters": []},
+    )
+
+    body = _render_blocks(blocks)
+
+    assert "if (not User registration is successful) then (+)" in body
+    assert ":Handle registration failure;" in body
+    assert "else (-)" not in body
 
 
 def _small_ir() -> dict[str, object]:

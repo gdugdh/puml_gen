@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from src.llm import load_config
+from src.logging_utils import log_event
 from src.logging_utils import log_run_start
 from src.workflow import build_workflow
 
@@ -17,8 +18,18 @@ def gen_png_graph(app_obj: Any, name_photo: str = "graph.png") -> None:
         app_obj: Скомпилированный объект графа
         name_photo: Имя файла для сохранения (по умолчанию "graph.png")
     """
-    with open(name_photo, "wb") as f:
-        f.write(app_obj.get_graph().draw_mermaid_png())
+    try:
+        with open(name_photo, "wb") as f:
+            f.write(app_obj.get_graph().draw_mermaid_png())
+    except Exception as error:
+        log_event(
+            "graph_png_generation_failed",
+            {
+                "path": name_photo,
+                "error_type": type(error).__name__,
+                "error": str(error),
+            },
+        )
 
 
 def generate_from_file(

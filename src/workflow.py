@@ -8,6 +8,7 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.graph import END, START, StateGraph
 
 from src.llm import LLMConfig, chat_json
+from src.logging_utils import log_event
 
 
 FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
@@ -27,6 +28,7 @@ FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
 1. Только JSON, без markdown.
 2. kind только: action, if, partition.
 3. Старайся описывать каждый блок кодом, если никак не получится передать смысл кода, то текстом описывай
+4. Пиши текст на русском
 
 route:
 {route_json}
@@ -56,6 +58,7 @@ FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
 1. Только JSON, без markdown.
 2. kind только: action, if, partition.
 3. Старайся описывать каждый блок кодом, если никак не получится передать смысл кода, то текстом описывай
+4. Пиши текст на русском
 
 function:
 {function_json}
@@ -92,12 +95,13 @@ VALIDATOR_PROMPT = PromptTemplate.from_template(
 Ответ только JSON:
 {{"is_valid": true, "feedback": ""}}
 
-Ошибки:
-1. сломанный синтаксис;
-2. route-level дубли внутри service-body;
-3. helper-логика раскрыта второй раз;
-4. важная ветка потеряна;
-5. слишком много технического шума.
+Правила:
+1. Если deterministic_error не "none", верни is_valid=false и feedback с этой ошибкой.
+2. Если deterministic_error == "none", считай синтаксис PlantUML корректным.
+3. Общая диаграмма ожидаемо содержит route-shell (Request/HTTP/Build response) и service actions вместе. Это не ошибка.
+4. Верни is_valid=false только если можешь указать конкретную потерянную важную ветку или конкретный дублирующий/мусорный фрагмент из diagram.
+5. feedback всегда строка, не список.
+6. Не копируй эти правила в feedback.
 
 Не придирайся к мелкому стилю.
 
@@ -179,6 +183,12 @@ def build_shell_node(state: DiagramState) -> DiagramState:
     header_fragment = _build_header(state["route"], state["route_function"])
     footer_fragment = _build_footer(state["route"], state["route_function"])
     current_puml = _assemble_puml(header_fragment, "", footer_fragment)
+    _log_workflow_node(
+        "build_shell",
+        state,
+        header_lines=len(header_fragment.splitlines()),
+        footer_lines=len(footer_fragment.splitlines()),
+    )
     return {
         "header_fragment": header_fragment,
         "footer_fragment": footer_fragment,
@@ -198,6 +208,11 @@ def build_shell_node(state: DiagramState) -> DiagramState:
 
 
 def generate_route_blocks_node(state: DiagramState) -> DiagramState:
+    _log_workflow_node(
+        "generate_route_blocks:start",
+        state,
+        feedback_present=bool(state.get("validation_feedback")),
+    )
     prompt = FUNCTION_BLOCK_PROMPT.format(
         route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
         function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
@@ -214,6 +229,12 @@ def generate_route_blocks_node(state: DiagramState) -> DiagramState:
         route_function=state["route_function"],
     )
     route_body_fragment = _render_blocks(route_blocks)
+    _log_workflow_node(
+        "generate_route_blocks:end",
+        state,
+        route_blocks=len(route_blocks),
+        route_body_lines=len(route_body_fragment.splitlines()) if route_body_fragment else 0,
+    )
     return {
         "route_blocks": route_blocks,
         "route_body_fragment": route_body_fragment,
@@ -222,6 +243,12 @@ def generate_route_blocks_node(state: DiagramState) -> DiagramState:
 
 
 def generate_service_blocks_node(state: DiagramState) -> DiagramState:
+    _log_workflow_node(
+        "generate_service_blocks:start",
+        state,
+        service_functions=len(state["service_functions"]),
+        feedback_present=bool(state.get("validation_feedback")),
+    )
     raw_blocks: list[dict[str, object]] = []
     filtered_service_blocks: list[dict[str, object]] = []
     service_artifacts: list[ServiceArtifact] = []
@@ -252,8 +279,23 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
                 "current_puml": _build_service_puml(function_id, next_filtered_blocks),
             }
         )
+        _log_workflow_node(
+            "generate_service_blocks:function",
+            state,
+            function_id=function_id,
+            raw_blocks=len(next_raw_blocks),
+            filtered_blocks=len(next_filtered_blocks),
+        )
 
     filtered_blocks = list(state.get("route_blocks", [])) + filtered_service_blocks
+    _log_workflow_node(
+        "generate_service_blocks:end",
+        state,
+        raw_blocks=len(raw_blocks),
+        filtered_service_blocks=len(filtered_service_blocks),
+        merged_blocks=len(filtered_blocks),
+        service_artifacts=len(service_artifacts),
+    )
 
     return {
         "raw_blocks": raw_blocks,
@@ -264,6 +306,11 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
 
 
 def compress_blocks_node(state: DiagramState) -> DiagramState:
+    _log_workflow_node(
+        "compress_blocks:start",
+        state,
+        input_blocks=len(state.get("filtered_blocks", [])),
+    )
     prompt = COMPRESS_BLOCK_PROMPT.format(
         compression_rules=_compression_rules(),
         current_block_json=json.dumps(state.get("filtered_blocks", []), ensure_ascii=False, indent=2),
@@ -279,6 +326,11 @@ def compress_blocks_node(state: DiagramState) -> DiagramState:
         compressed_blocks,
         route_function=state["route_function"],
     )
+    _log_workflow_node(
+        "compress_blocks:end",
+        state,
+        compressed_blocks=len(compressed_blocks),
+    )
     return {
         "compressed_blocks": compressed_blocks,
         "validator_passed": False,
@@ -289,6 +341,13 @@ def render_puml_node(state: DiagramState) -> DiagramState:
     previous_puml = state.get("current_puml", "")
     body_fragment = _render_blocks(state.get("compressed_blocks", []))
     current_puml = _assemble_puml(state["header_fragment"], body_fragment, state["footer_fragment"])
+    _log_workflow_node(
+        "render_puml",
+        state,
+        body_lines=len(body_fragment.splitlines()) if body_fragment else 0,
+        puml_lines=len(current_puml.splitlines()),
+        diff_lines=len(_diff_text(previous_puml, current_puml).splitlines()),
+    )
     return {
         "body_fragment": body_fragment,
         "current_puml": current_puml,
@@ -298,6 +357,11 @@ def render_puml_node(state: DiagramState) -> DiagramState:
 
 
 def validate_puml_node(state: DiagramState) -> DiagramState:
+    _log_workflow_node(
+        "validate_puml:start",
+        state,
+        puml_lines=len(state["current_puml"].splitlines()),
+    )
     deterministic_error = _deterministic_validate(state["current_puml"])
     prompt = VALIDATOR_PROMPT.format(
         route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
@@ -308,11 +372,11 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты валидируешь activity-диаграмму и отвечаешь только JSON.",
+        system_prompt="Ты валидируешь activity-диаграмму. Возвращай is_valid=false только с конкретной причиной из diagram.",
         user_prompt=prompt,
         node_name="validate_puml",
     )
-    feedback = str(result.get("feedback", "")).strip()
+    feedback = _feedback_to_text(result.get("feedback"))
     llm_is_valid = result.get("is_valid")
     validator_passed = deterministic_error is None and llm_is_valid is True
 
@@ -329,10 +393,24 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
         "validation_feedback": "" if validator_passed else "\n".join(validation_parts),
     }
     next_state["retry_count"] = 0 if validator_passed else state.get("retry_count", 0) + 1
+    _log_workflow_node(
+        "validate_puml:end",
+        state,
+        deterministic_error=deterministic_error,
+        llm_is_valid=llm_is_valid,
+        validator_passed=validator_passed,
+        next_retry_count=next_state["retry_count"],
+        feedback=next_state["validation_feedback"],
+    )
     return next_state
 
 
 def finalize_node(state: DiagramState) -> DiagramState:
+    _log_workflow_node(
+        "finalize:start",
+        state,
+        service_artifacts=len(state.get("service_artifacts", [])),
+    )
     final_error = _deterministic_validate(state["current_puml"])
     if final_error:
         raise RuntimeError(f"Final diagram is invalid: {final_error}")
@@ -349,9 +427,12 @@ def finalize_node(state: DiagramState) -> DiagramState:
 
 def route_after_validation(state: DiagramState) -> str:
     if state.get("validator_passed", False):
+        _log_workflow_node("route_after_validation", state, next_node="finalize")
         return "finalize"
     if state.get("retry_count", 0) < state.get("max_retries", 2):
+        _log_workflow_node("route_after_validation", state, next_node="retry")
         return "retry"
+    _log_workflow_node("route_after_validation", state, next_node="raise")
     raise RuntimeError(f"Validation failed: {state.get('validation_feedback', '')}")
 
 
@@ -412,6 +493,8 @@ def _filter_single_block(
         text = str(block.get("text", "")).strip()
         if _is_route_level_duplicate(text, route_param_names):
             return None
+        if _is_control_flow_noise(text):
+            return None
         return {"kind": "action", "text": text}
 
     if kind == "partition":
@@ -448,6 +531,8 @@ def _filter_single_block(
         ]
         if not then_blocks and not else_blocks:
             return None
+        if not then_blocks and else_blocks:
+            return {"kind": "if", "condition": f"not {condition}", "then": else_blocks}
         payload: dict[str, object] = {"kind": "if", "condition": condition, "then": then_blocks}
         if else_blocks:
             payload["else"] = else_blocks
@@ -480,6 +565,25 @@ def _is_route_level_duplicate(text: str, route_param_names: set[str]) -> bool:
         if lowered == f"extract {name} from request".lower():
             return True
     return False
+
+
+def _is_control_flow_noise(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().strip(".:;").split())
+    if "try block" in normalized or "блок try" in normalized:
+        return True
+    return normalized in {
+        "try",
+        "try block",
+        "start try",
+        "start try block",
+        "begin try",
+        "begin try block",
+        "enter try",
+        "enter try block",
+        "except",
+        "catch",
+        "exception handler",
+    } or normalized.startswith(("start try block ", "begin try block ", "enter try block "))
 
 
 def _compression_rules() -> str:
@@ -539,13 +643,13 @@ def _deterministic_validate(text: str) -> str | None:
         return "Diagram must contain exactly one @startuml and one @enduml"
     if text.count("(") != text.count(")"):
         return "Unbalanced parentheses count"
-    lowered = text.lower()
-    if "try" in lowered or "\nexcept" in lowered or "\ncatch" in lowered:
-        return "Unsupported pseudo-syntax found"
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
+        normalized = line.lower().strip(":;")
+        if normalized in {"try", "try:", "except", "except:", "catch", "catch:", "end try", "endtry"}:
+            return f"Unsupported pseudo-syntax found: {line}"
         if line.startswith(("@startuml", "@enduml", "title ", "start", "end", "if ", "else", "endif", "partition ", "}", ":", "note")):
             continue
         return f"Unsupported line syntax: {line}"
@@ -608,6 +712,9 @@ def _sanitize_condition(text: str) -> str:
     text = text.removeprefix("if").strip()
     if text.startswith("(") and text.endswith(")"):
         text = text[1:-1].strip()
+    text = text.replace("during the try block", "during execution")
+    text = text.replace("during try block", "during execution")
+    text = text.replace("in the try block", "during execution")
     return text or "condition"
 
 
@@ -615,6 +722,12 @@ def _ensure_dict_list(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _feedback_to_text(value: object) -> str:
+    if isinstance(value, list):
+        return "\n".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
 
 
 def _diff_text(old: str, new: str) -> str:
@@ -626,3 +739,19 @@ def _diff_text(old: str, new: str) -> str:
             tofile="after.puml",
         )
     )
+
+
+def _log_workflow_node(node_name: str, state: DiagramState, **payload: object) -> None:
+    try:
+        route = state.get("route", {})
+        log_event(
+            "workflow_node",
+            {
+                "node_name": node_name,
+                "route_id": route.get("route_id") if isinstance(route, dict) else None,
+                "retry_count": state.get("retry_count", 0),
+                **payload,
+            },
+        )
+    except Exception:
+        pass
