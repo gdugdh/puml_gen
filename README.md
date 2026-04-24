@@ -71,6 +71,7 @@ docker compose run --rm puml-gen \
 
 Сейчас проект работает с synthetic / intermediate IR в JSON-формате.
 Основной сценарий — генерация activity-диаграмм по роутам и сервисным функциям.
+В `routes` route-handler задаётся отдельно, а сервисные функции передаются как nested list в `service_function_groups`, даже если сейчас внутри только один `function_id`.
 
 ## Выходные данные
 

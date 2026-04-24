@@ -1139,7 +1139,11 @@
     {
       "route_id": "POST /auth",
       "handler_function_id": "src.auth.controller.register_user",
-      "service_entry_function_id": "src.auth.service.register_user",
+      "service_function_groups": [
+        [
+          "src.auth.service.register_user"
+        ]
+      ],
       "request_model": "src.auth.model.RegisterUserRequest",
       "response_model": null,
       "core_entity": "src.entities.user.User",
@@ -1170,7 +1174,11 @@
     {
       "route_id": "POST /auth/token",
       "handler_function_id": "src.auth.controller.login_for_access_token",
-      "service_entry_function_id": "src.auth.service.login_for_access_token",
+      "service_function_groups": [
+        [
+          "src.auth.service.login_for_access_token"
+        ]
+      ],
       "request_model": "fastapi.security.OAuth2PasswordRequestForm",
       "response_model": "src.auth.model.Token",
       "core_entity": "src.entities.user.User",

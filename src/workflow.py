@@ -25,6 +25,49 @@ STYLE_SUMMARY = """
 
 FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
     """
+Ты превращаешь IR одной route-функции в строгий JSON-блок.
+Ответ только JSON.
+
+Формат:
+{{
+  "blocks": [
+    {{"kind":"action","text":"..."}},
+    {{"kind":"if","condition":"...","then":[{{"kind":"action","text":"..."}}],"else":[{{"kind":"action","text":"..."}}]}},
+    {{"kind":"partition","title":"...","blocks":[{{"kind":"action","text":"..."}}]}}
+  ]
+}}
+
+Жесткие правила:
+1. Только JSON, без markdown.
+2. kind только: action, if, partition.
+3. Нельзя писать @startuml, @enduml, title, start, end, Request, R1, R2, Build response, HTTP.
+4. Показывай только orchestration текущей route-функции.
+5. Нельзя раскрывать service/helper functions.
+6. Нельзя писать строки про Request.* или response-level блоки.
+7. Нельзя использовать try/catch/except.
+8. action.text без ":" в начале и без ";" в конце.
+9. В route mode делай блок кратким и orchestration-only.
+10. В service mode route-блок нужен только как контекст для service-функций, не добавляй лишние детали.
+
+Стиль:
+{style_summary}
+
+diagram_mode:
+{diagram_mode}
+
+route:
+{route_json}
+
+route_function:
+{function_json}
+
+feedback:
+{feedback}
+""".strip()
+)
+
+FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
+    """
 Ты превращаешь IR одной service-функции в строгий JSON-блок.
 Ответ только JSON.
 
@@ -41,12 +84,13 @@ FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
 1. Только JSON, без markdown.
 2. kind только: action, if, partition.
 3. Нельзя писать @startuml, @enduml, title, start, end, Request, R1, R2, Build response, HTTP.
-4. Нельзя раскрывать nested helper functions.
-5. Нельзя писать строки про Request.* или response-level блоки.
-6. Нельзя использовать try/catch/except.
-7. action.text без ":" в начале и без ";" в конце.
-8. В route mode пиши только значимые бизнес-шаги service-функции.
-9. В service mode можно чуть подробнее, но без технического шума.
+4. Раскрывай только текущую service-функцию; nested helper functions раскрывать нельзя.
+5. Не дублируй шаги, которые уже отражены в current_route_code.
+6. Нельзя писать строки про Request.* или response-level блоки.
+7. Нельзя использовать try/catch/except.
+8. action.text без ":" в начале и без ";" в конце.
+9. В route mode пиши только значимые бизнес-шаги service-функции.
+10. В service mode можно чуть подробнее, но без технического шума.
 
 Стиль:
 {style_summary}
@@ -56,6 +100,12 @@ diagram_mode:
 
 route:
 {route_json}
+
+route_function:
+{route_function_json}
+
+current_route_code:
+{current_route_code}
 
 service_function:
 {function_json}
@@ -112,8 +162,11 @@ diagram_mode:
 route:
 {route_json}
 
-service_function:
-{function_json}
+route_function:
+{route_function_json}
+
+service_functions:
+{service_functions_json}
 
 diagram:
 {current_puml}
@@ -127,11 +180,13 @@ deterministic_error:
 class DiagramState(TypedDict, total=False):
     route: dict[str, object]
     route_function: dict[str, object]
-    service_function: dict[str, object]
+    service_functions: list[dict[str, object]]
     diagram_mode: DiagramMode
     llm_config: LLMConfig
     header_fragment: str
     footer_fragment: str
+    route_blocks: list[dict[str, object]]
+    route_body_fragment: str
     raw_blocks: list[dict[str, object]]
     filtered_blocks: list[dict[str, object]]
     compressed_blocks: list[dict[str, object]]
@@ -147,6 +202,7 @@ class DiagramState(TypedDict, total=False):
 def build_workflow():
     graph = StateGraph(DiagramState)
     graph.add_node("build_shell", build_shell_node)
+    graph.add_node("generate_route_blocks", generate_route_blocks_node)
     graph.add_node("generate_service_blocks", generate_service_blocks_node)
     graph.add_node("compress_blocks", compress_blocks_node)
     graph.add_node("render_puml", render_puml_node)
@@ -154,7 +210,8 @@ def build_workflow():
     graph.add_node("finalize", finalize_node)
 
     graph.add_edge(START, "build_shell")
-    graph.add_edge("build_shell", "generate_service_blocks")
+    graph.add_edge("build_shell", "generate_route_blocks")
+    graph.add_edge("generate_route_blocks", "generate_service_blocks")
     graph.add_edge("generate_service_blocks", "compress_blocks")
     graph.add_edge("compress_blocks", "render_puml")
     graph.add_edge("render_puml", "validate_puml")
@@ -162,7 +219,7 @@ def build_workflow():
         "validate_puml",
         route_after_validation,
         {
-            "retry": "generate_service_blocks",
+            "retry": "generate_route_blocks",
             "finalize": "finalize",
         },
     )
@@ -171,12 +228,14 @@ def build_workflow():
 
 
 def build_shell_node(state: DiagramState) -> DiagramState:
-    header_fragment = _build_header(state["diagram_mode"], state["route"], state["route_function"], state["service_function"])
-    footer_fragment = _build_footer(state["diagram_mode"], state["route"], state["route_function"], state["service_function"])
+    header_fragment = _build_header(state["diagram_mode"], state["route"], state["route_function"], state["service_functions"])
+    footer_fragment = _build_footer(state["diagram_mode"], state["route"], state["route_function"], state["service_functions"])
     current_puml = _assemble_puml(header_fragment, "", footer_fragment)
     return {
         "header_fragment": header_fragment,
         "footer_fragment": footer_fragment,
+        "route_blocks": [],
+        "route_body_fragment": "",
         "raw_blocks": [],
         "filtered_blocks": [],
         "compressed_blocks": [],
@@ -189,26 +248,66 @@ def build_shell_node(state: DiagramState) -> DiagramState:
     }
 
 
-def generate_service_blocks_node(state: DiagramState) -> DiagramState:
+def generate_route_blocks_node(state: DiagramState) -> DiagramState:
     prompt = FUNCTION_BLOCK_PROMPT.format(
         style_summary=STYLE_SUMMARY,
         diagram_mode=state["diagram_mode"],
         route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
-        function_json=json.dumps(state["service_function"], ensure_ascii=False, indent=2),
+        function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
         feedback=state.get("validation_feedback", ""),
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты генерируешь только JSON-блоки для activity-диаграммы.",
+        system_prompt="Ты генерируешь только JSON-блоки для route activity-диаграммы.",
         user_prompt=prompt,
-        node_name="generate_service_blocks",
+        node_name="generate_route_blocks",
     )
-    raw_blocks = _ensure_dict_list(result.get("blocks"))
-    filtered_blocks = _filter_service_blocks(
-        raw_blocks,
+    route_blocks = _filter_generated_blocks(
+        _ensure_dict_list(result.get("blocks")),
         diagram_mode=state["diagram_mode"],
         route_function=state["route_function"],
     )
+    route_body_fragment = _render_blocks(route_blocks)
+    return {
+        "route_blocks": route_blocks,
+        "route_body_fragment": route_body_fragment,
+        "validator_passed": False,
+    }
+
+
+def generate_service_blocks_node(state: DiagramState) -> DiagramState:
+    raw_blocks: list[dict[str, object]] = []
+    filtered_service_blocks: list[dict[str, object]] = []
+
+    for service_function in state["service_functions"]:
+        prompt = FUNCTION_SERVICE_BLOCK_PROMPT.format(
+            style_summary=STYLE_SUMMARY,
+            diagram_mode=state["diagram_mode"],
+            route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
+            route_function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
+            current_route_code=state.get("route_body_fragment", ""),
+            function_json=json.dumps(service_function, ensure_ascii=False, indent=2),
+            feedback=state.get("validation_feedback", ""),
+        )
+        result = chat_json(
+            state["llm_config"],
+            system_prompt="Ты генерируешь только JSON-блоки для service activity-диаграммы.",
+            user_prompt=prompt,
+            node_name=f"generate_service_blocks:{service_function.get('function_id', 'unknown')}",
+        )
+        next_raw_blocks = _ensure_dict_list(result.get("blocks"))
+        next_filtered_blocks = _filter_generated_blocks(
+            next_raw_blocks,
+            diagram_mode=state["diagram_mode"],
+            route_function=state["route_function"],
+        )
+        raw_blocks.extend(next_raw_blocks)
+        filtered_service_blocks.extend(next_filtered_blocks)
+
+    filtered_blocks = list(state.get("route_blocks", [])) + filtered_service_blocks
+    if state["diagram_mode"] == "service":
+        filtered_blocks = filtered_service_blocks
+
     return {
         "raw_blocks": raw_blocks,
         "filtered_blocks": filtered_blocks,
@@ -229,7 +328,7 @@ def compress_blocks_node(state: DiagramState) -> DiagramState:
         node_name="compress_blocks",
     )
     compressed_blocks = _ensure_dict_list(result.get("blocks"))
-    compressed_blocks = _filter_service_blocks(
+    compressed_blocks = _filter_generated_blocks(
         compressed_blocks,
         diagram_mode=state["diagram_mode"],
         route_function=state["route_function"],
@@ -257,7 +356,8 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
     prompt = VALIDATOR_PROMPT.format(
         diagram_mode=state["diagram_mode"],
         route_json=json.dumps(state["route"], ensure_ascii=False, indent=2),
-        function_json=json.dumps(state["service_function"], ensure_ascii=False, indent=2),
+        route_function_json=json.dumps(state["route_function"], ensure_ascii=False, indent=2),
+        service_functions_json=json.dumps(state["service_functions"], ensure_ascii=False, indent=2),
         current_puml=state["current_puml"],
         deterministic_error=deterministic_error or "none",
     )
@@ -297,9 +397,9 @@ def _build_header(
     diagram_mode: DiagramMode,
     route: dict[str, object],
     route_function: dict[str, object],
-    service_function: dict[str, object],
+    service_functions: list[dict[str, object]],
 ) -> str:
-    title = route["route_id"] if diagram_mode == "route" else service_function["function_id"]
+    title = route["route_id"] if diagram_mode == "route" else _service_diagram_title(route, service_functions)
     lines = ["@startuml", f"title {title}", "start"]
     if diagram_mode == "route":
         lines.extend(["", ":Request;", "note: R1"])
@@ -317,7 +417,7 @@ def _build_footer(
     diagram_mode: DiagramMode,
     route: dict[str, object],
     route_function: dict[str, object],
-    service_function: dict[str, object],
+    service_functions: list[dict[str, object]],
 ) -> str:
     lines = [""]
     if diagram_mode == "route":
@@ -335,7 +435,7 @@ def _build_footer(
     return "\n".join(lines).strip()
 
 
-def _filter_service_blocks(
+def _filter_generated_blocks(
     blocks: list[dict[str, object]],
     *,
     diagram_mode: DiagramMode,
@@ -558,6 +658,12 @@ def _short_name(value: object) -> str:
     if not isinstance(value, str):
         return "Response"
     return value.rsplit(".", maxsplit=1)[-1]
+
+
+def _service_diagram_title(route: dict[str, object], service_functions: list[dict[str, object]]) -> str:
+    if len(service_functions) == 1:
+        return str(service_functions[0].get("function_id", route["route_id"]))
+    return f"{route['route_id']} services"
 
 
 def _sanitize_action_text(text: str) -> str:

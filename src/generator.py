@@ -44,16 +44,16 @@ def generate_from_file(
     functions_by_id = {function["function_id"]: function for function in data.get("functions", [])}
     workflow = build_workflow()
 
-    gen_png_graph(workflow, "docs/graph.png")    
+    gen_png_graph(workflow, "docs/graph.png")
 
     generated_files: list[Path] = []
     for route in data.get("routes", []):
         route_function = functions_by_id[route["handler_function_id"]]
-        service_function = functions_by_id[route["service_entry_function_id"]]
+        service_functions = _resolve_service_functions(route, functions_by_id)
         state = {
             "route": route,
             "route_function": route_function,
-            "service_function": service_function,
+            "service_functions": service_functions,
             "diagram_mode": diagram_mode,
             "llm_config": llm_config,
             "max_retries": 2,
@@ -69,3 +69,32 @@ def _route_slug(route_id: str) -> str:
     route_id = route_id.replace(" /", "_").replace("/", "_").replace(" ", "_")
     route_id = route_id.replace("{", "").replace("}", "").replace("-", "_")
     return route_id.strip("_")
+
+
+def _resolve_service_functions(
+    route: dict[str, object],
+    functions_by_id: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    nested_service_ids = route.get("service_function_groups")
+    service_ids: list[str] = []
+
+    if isinstance(nested_service_ids, list):
+        for group in nested_service_ids:
+            if isinstance(group, list):
+                service_ids.extend(function_id for function_id in group if isinstance(function_id, str))
+            elif isinstance(group, str):
+                service_ids.append(group)
+
+    legacy_service_id = route.get("service_entry_function_id")
+    if not service_ids and isinstance(legacy_service_id, str):
+        service_ids.append(legacy_service_id)
+
+    if not service_ids:
+        raise ValueError(f"Route {route.get('route_id', '<unknown>')} does not reference service functions")
+
+    service_functions: list[dict[str, object]] = []
+    for function_id in service_ids:
+        if function_id not in functions_by_id:
+            raise KeyError(f"Unknown service function id '{function_id}' for route {route.get('route_id', '<unknown>')}")
+        service_functions.append(functions_by_id[function_id])
+    return service_functions
