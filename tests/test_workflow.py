@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from src.generator import generate_from_file
 from src.llm import LLMConfig
@@ -11,6 +12,7 @@ from src.workflow import _prepare_generated_blocks
 from src.workflow import _render_blocks
 from src.workflow import _route_prompt_context
 from src.workflow import _service_prompt_context
+from src.workflow import _strip_technical_try_except_steps
 from src.workflow import _validator_prompt_context
 from src.workflow import compress_blocks_node
 from src.workflow import generate_service_blocks_node
@@ -396,6 +398,26 @@ def test_route_and_service_prompt_contexts_are_compact():
     }
 
 
+def test_strip_technical_try_except_steps_from_real_synthetic_input():
+    data = json.loads(Path("input/synthetic_data.json").read_text(encoding="utf-8"))
+    register_user = next(
+        function for function in data["functions"] if function["function_id"] == "src.auth.service.register_user"
+    )
+
+    stripped_steps = _strip_technical_try_except_steps(register_user["steps"])
+    service_context = _service_prompt_context(register_user)
+    service_sources = [step["source"] for step in service_context["steps"]]
+
+    assert stripped_steps
+    assert all(step.get("kind") not in {"try", "except"} for step in stripped_steps)
+    assert "try: ..." not in service_sources
+    assert "except Exception as e:" not in service_sources
+    assert "logging.error(f'Error registering user: {user.username} with Error: {e}')" not in service_sources
+    assert "raise" not in service_sources
+    assert "db.commit()" in service_sources
+    assert "implicit return None" in service_sources
+
+
 def test_validator_prompt_context_depends_on_diagram_kind():
     state = {
         "route": {"route_id": "POST /auth"},
@@ -526,8 +548,47 @@ def test_compress_blocks_cleans_logging_and_bare_raise_locally(monkeypatch):
 
     assert ":logging.error(f'Error: {e}');" not in body
     assert ":raise;" not in body
-    assert "    end" in body.splitlines()
+    assert "end" not in body.splitlines()
     assert ":db.commit();" in body
+
+
+def test_compress_blocks_collapses_pure_technical_exception_branch(monkeypatch):
+    def fake_chat_json(*args, **kwargs):
+        return {
+            "blocks": [
+                {
+                    "kind": "if",
+                    "condition": "ошибка при выполнении",
+                    "then": [
+                        {"kind": "action", "text": "logging.error(f'Error: {e}')"},
+                        {"kind": "action", "text": "raise"},
+                        {"kind": "action", "text": "end"},
+                    ],
+                    "else": [
+                        {"kind": "action", "text": "db.add(user_model)"},
+                        {"kind": "action", "text": "db.commit()"},
+                        {"kind": "action", "text": "stop"},
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    result = compress_blocks_node(
+        {
+            "route_function": {"parameters": []},
+            "current_blocks": [{"kind": "action", "text": "db.commit()"}],
+            "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+        }
+    )
+
+    body = _render_blocks(result["compressed_blocks"])
+
+    assert "if (ошибка при выполнении)" not in body
+    assert ":db.add(user_model);" in body
+    assert ":db.commit();" in body
+    assert "stop" in body.splitlines()
 
 
 def test_route_after_validation_allows_three_retries_and_raises_on_fourth():

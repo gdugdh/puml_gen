@@ -1106,6 +1106,10 @@ def _cleanup_compressed_blocks(blocks: list[dict[str, object]]) -> list[dict[str
         else:
             cleaned_nested.append(block)
 
+    collapsed = _collapse_technical_exception_if(cleaned_nested)
+    if collapsed is not None:
+        return _dedupe_adjacent_terminal_blocks(collapsed)
+
     result: list[dict[str, object]] = []
     for index, block in enumerate(cleaned_nested):
         if block.get("kind") != "action":
@@ -1120,6 +1124,29 @@ def _cleanup_compressed_blocks(blocks: list[dict[str, object]]) -> list[dict[str
                 continue
         result.append(block)
     return _dedupe_adjacent_terminal_blocks(result)
+
+
+def _collapse_technical_exception_if(blocks: list[dict[str, object]]) -> list[dict[str, object]] | None:
+    trailing_stop: list[dict[str, object]] = []
+    candidate_blocks = blocks
+    if len(blocks) >= 2:
+        last_block = blocks[-1]
+        if last_block.get("kind") == "action" and _terminal_action(str(last_block.get("text", ""))) == "stop":
+            trailing_stop = [last_block]
+            candidate_blocks = blocks[:-1]
+    if len(candidate_blocks) != 1:
+        return None
+    block = candidate_blocks[0]
+    if block.get("kind") != "if":
+        return None
+    condition = " ".join(str(block.get("condition", "")).strip().lower().split())
+    if condition != "ошибка при выполнении":
+        return None
+    error_blocks = _ensure_dict_list(block.get("then"))
+    success_blocks = _ensure_dict_list(block.get("else"))
+    if not success_blocks or not _is_pure_technical_exception_branch(error_blocks):
+        return None
+    return [*success_blocks, *trailing_stop]
 
 
 def _render_blocks(blocks: object) -> str:
@@ -1261,7 +1288,7 @@ def _service_prompt_context(function: dict[str, object]) -> dict[str, object]:
     return {
         "function_id": function.get("function_id"),
         "signature": function.get("signature"),
-        "steps": _prompt_steps(function),
+        "steps": _prompt_steps(function, strip_technical_exceptions=True),
     }
 
 
@@ -1309,9 +1336,16 @@ def _prompt_parameters(function: dict[str, object]) -> list[dict[str, object]]:
     return result
 
 
-def _prompt_steps(function: dict[str, object]) -> list[dict[str, object]]:
+def _prompt_steps(
+    function: dict[str, object],
+    *,
+    strip_technical_exceptions: bool = False,
+) -> list[dict[str, object]]:
+    steps_source = function.get("steps", [])
+    if strip_technical_exceptions:
+        steps_source = _strip_technical_try_except_steps(steps_source)
     result: list[dict[str, object]] = []
-    for step in function.get("steps", []):
+    for step in steps_source:
         if not isinstance(step, dict):
             continue
         compact_step = {
@@ -1440,6 +1474,57 @@ def _is_return_action(text: str) -> bool:
 def _is_compress_removable_log_action(text: str) -> bool:
     normalized = " ".join(text.lower().strip().split())
     return normalized.startswith(("logging.", "logger.")) or normalized.startswith(("log ", "logging "))
+
+
+def _is_pure_technical_exception_branch(blocks: list[dict[str, object]]) -> bool:
+    if not blocks:
+        return False
+    for block in blocks:
+        if block.get("kind") != "action":
+            return False
+        text = str(block.get("text", ""))
+        terminal = _terminal_action(text)
+        if terminal == "end":
+            continue
+        if _is_compress_removable_log_action(text):
+            continue
+        if _is_bare_raise_action(text):
+            continue
+        return False
+    return True
+
+
+def _strip_technical_try_except_steps(steps: object) -> list[dict[str, object]]:
+    if not isinstance(steps, list):
+        return []
+    normalized_steps = [step for step in steps if isinstance(step, dict)]
+    try_index = next((index for index, step in enumerate(normalized_steps) if step.get("kind") == "try"), -1)
+    except_index = next((index for index, step in enumerate(normalized_steps) if step.get("kind") == "except"), -1)
+    if try_index < 0 or except_index < 0 or except_index <= try_index:
+        return normalized_steps
+    except_step = normalized_steps[except_index]
+    exception_name = str(except_step.get("exception") or "").strip()
+    if exception_name not in {"Exception", "exception"}:
+        return normalized_steps
+    success_steps = normalized_steps[try_index + 1 : except_index]
+    error_tail = normalized_steps[except_index + 1 :]
+    if not success_steps or not _is_technical_exception_tail_steps(error_tail):
+        return normalized_steps
+    return success_steps
+
+
+def _is_technical_exception_tail_steps(steps: list[dict[str, object]]) -> bool:
+    if not steps:
+        return False
+    for step in steps:
+        kind = str(step.get("kind", "")).strip().lower()
+        source = str(step.get("source", "")).strip()
+        if kind.startswith("log") or _is_compress_removable_log_action(source):
+            continue
+        if kind == "raise" and _is_bare_raise_action(source or "raise"):
+            continue
+        return False
+    return True
 
 
 def _is_terminal_action(text: str) -> bool:
