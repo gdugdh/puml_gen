@@ -399,6 +399,7 @@ def compress_blocks_node(state: DiagramState) -> DiagramState:
         route_function=state["route_function"],
         append_stop=True,
     )
+    compressed_blocks = _cleanup_compressed_blocks(compressed_blocks)
     return {
         "compressed_blocks": compressed_blocks,
         "current_blocks": compressed_blocks,
@@ -428,47 +429,10 @@ def render_puml_node(state: DiagramState) -> DiagramState:
 
 def validate_puml_node(state: DiagramState) -> DiagramState:
     deterministic_error = _deterministic_validate(state["current_puml"])
-    diagram_kind = state.get("current_diagram_kind", "route")
-    prompt = VALIDATOR_PROMPT.format(
-        diagram_kind=diagram_kind,
-        current_puml=state["current_puml"],
-        diagram_context_json=json.dumps(
-            _validator_prompt_context(state, diagram_kind=diagram_kind),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        deterministic_error=deterministic_error or "none",
-    )
-    result = chat_json(
-        state["llm_config"],
-        system_prompt=(
-            "Ты валидируешь activity-диаграмму. "
-            "Фейли только по доказуемым критичным ошибкам из diagram и context. "
-            "Спорные замечания клади в warning_feedback. "
-            "Если сомневаешься, возвращай is_valid=true."
-        ),
-        user_prompt=prompt,
-        node_name="validate_puml",
-    )
-    critical_feedback = _feedback_to_text(result.get("critical_feedback"))
-    if not critical_feedback:
-        critical_feedback = _feedback_to_text(result.get("feedback"))
-    warning_feedback = _feedback_to_text(result.get("warning_feedback"))
-    suggested_fix = _feedback_to_text(result.get("suggested_fix"))
-    llm_is_valid = result.get("is_valid")
-    validator_passed = deterministic_error is None and not critical_feedback
-
+    validator_passed = deterministic_error is None
     validation_parts: list[str] = []
     if deterministic_error:
         validation_parts.append(deterministic_error)
-    if critical_feedback:
-        validation_parts.append(critical_feedback)
-    if suggested_fix:
-        validation_parts.append(f"Suggested fix: {suggested_fix}")
-    if warning_feedback:
-        validation_parts.append(f"Warning: {warning_feedback}")
-    if llm_is_valid is not True and not critical_feedback:
-        validation_parts.append(f"LLM validator returned is_valid={llm_is_valid!r}")
 
     next_state: DiagramState = {
         "validator_passed": validator_passed,
@@ -902,7 +866,12 @@ def _merge_block_list(
         kind = block.get("kind")
         if kind == "action":
             merged.append(block)
-            service_artifact = _find_called_service_artifact(str(block.get("text", "")), service_artifacts)
+            action_text = str(block.get("text", ""))
+            service_artifact = (
+                _find_called_service_artifact(action_text, service_artifacts)
+                if _should_inline_service_after_action(action_text)
+                else None
+            )
             if service_artifact is not None:
                 used_function_ids.add(service_artifact["function_id"])
                 merged.extend(_blocks_for_route_merge(service_artifact["blocks"]))
@@ -986,6 +955,17 @@ def _find_called_service_artifact(
     if len(service_artifacts) == 1 and _looks_like_service_call(text):
         return service_artifacts[0]
     return None
+
+
+def _should_inline_service_after_action(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().strip(".:;").split())
+    if not normalized:
+        return False
+    if _is_return_action(text):
+        return False
+    if "результат вызова" in normalized or "return result" in normalized:
+        return False
+    return True
 
 
 def _upsert_service_artifact(
@@ -1097,6 +1077,49 @@ def _compression_rules() -> str:
         "- Не удаляй DB write/read, entity/model creation, ошибки.\n"
         "- Не удаляй terminal actions end/stop."
     )
+
+
+def _cleanup_compressed_blocks(blocks: list[dict[str, object]]) -> list[dict[str, object]]:
+    cleaned_nested: list[dict[str, object]] = []
+    for block in blocks:
+        kind = block.get("kind")
+        if kind == "if":
+            next_block: dict[str, object] = {
+                "kind": "if",
+                "condition": block.get("condition", "condition"),
+                "then": _cleanup_compressed_blocks(_ensure_dict_list(block.get("then"))),
+            }
+            else_blocks = _ensure_dict_list(block.get("else"))
+            if else_blocks:
+                next_block["else"] = _cleanup_compressed_blocks(else_blocks)
+            cleaned_nested.append(next_block)
+        elif kind == "partition":
+            inner = _cleanup_compressed_blocks(_ensure_dict_list(block.get("blocks")))
+            if inner:
+                cleaned_nested.append(
+                    {
+                        "kind": "partition",
+                        "title": block.get("title", "Block"),
+                        "blocks": inner,
+                    }
+                )
+        else:
+            cleaned_nested.append(block)
+
+    result: list[dict[str, object]] = []
+    for index, block in enumerate(cleaned_nested):
+        if block.get("kind") != "action":
+            result.append(block)
+            continue
+        text = str(block.get("text", ""))
+        if _is_compress_removable_log_action(text):
+            continue
+        next_block = cleaned_nested[index + 1] if index + 1 < len(cleaned_nested) else None
+        if _is_bare_raise_action(text) and isinstance(next_block, dict):
+            if next_block.get("kind") == "action" and _terminal_action(str(next_block.get("text", ""))) == "end":
+                continue
+        result.append(block)
+    return _dedupe_adjacent_terminal_blocks(result)
 
 
 def _render_blocks(blocks: object) -> str:
@@ -1404,9 +1427,19 @@ def _is_raise_action(text: str) -> bool:
     )
 
 
+def _is_bare_raise_action(text: str) -> bool:
+    normalized = " ".join(text.lower().strip(".:;").split())
+    return normalized == "raise"
+
+
 def _is_return_action(text: str) -> bool:
     normalized = " ".join(text.lower().strip(".:;").split())
     return normalized.startswith("return ") or normalized.startswith("вернуть ") or normalized.startswith("возвращ")
+
+
+def _is_compress_removable_log_action(text: str) -> bool:
+    normalized = " ".join(text.lower().strip().split())
+    return normalized.startswith(("logging.", "logger.")) or normalized.startswith(("log ", "logging "))
 
 
 def _is_terminal_action(text: str) -> bool:

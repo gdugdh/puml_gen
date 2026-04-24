@@ -18,18 +18,13 @@ from src.workflow import route_after_validation
 from src.workflow import validate_puml_node
 
 
-def test_validate_puml_node_rejects_llm_is_valid_false(monkeypatch):
-    def fake_chat_json(*args, **kwargs):
-        return {"is_valid": False, "feedback": "important branch is missing"}
-
-    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
-
+def test_validate_puml_node_rejects_deterministic_error():
     state = {
         "route": {"route_id": "POST /auth"},
         "route_function": {"function_id": "handler", "parameters": []},
         "service_functions": [],
         "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
-        "current_puml": "@startuml\ntitle POST /auth\nstart\n:Do work;\nend\n@enduml\n",
+        "current_puml": "@startuml\ntitle POST /auth\nstart\n:Do work;\n@enduml\n",
         "retry_count": 1,
     }
 
@@ -37,16 +32,10 @@ def test_validate_puml_node_rejects_llm_is_valid_false(monkeypatch):
 
     assert result["validator_passed"] is False
     assert result["retry_count"] == 2
-    assert "important branch is missing" in result["validation_feedback"]
-    assert "is_valid=False" in result["validation_feedback"]
+    assert "Missing terminal end/stop before @enduml" in result["validation_feedback"]
 
 
-def test_validate_puml_node_includes_suggested_fix_and_resets_retry_count(monkeypatch):
-    def fake_chat_json(*args, **kwargs):
-        return {"is_valid": True, "feedback": "", "suggested_fix": ""}
-
-    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
-
+def test_validate_puml_node_resets_retry_count_on_valid_syntax():
     state = {
         "route": {"route_id": "POST /auth"},
         "route_function": {"function_id": "handler", "parameters": []},
@@ -63,17 +52,7 @@ def test_validate_puml_node_includes_suggested_fix_and_resets_retry_count(monkey
     assert result["validation_feedback"] == ""
 
 
-def test_validate_puml_node_ignores_warning_feedback(monkeypatch):
-    def fake_chat_json(*args, **kwargs):
-        return {
-            "is_valid": True,
-            "critical_feedback": "",
-            "warning_feedback": "Можно сделать шаг явнее",
-            "suggested_fix": "",
-        }
-
-    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
-
+def test_validate_puml_node_ignores_llm_and_accepts_valid_syntax():
     state = {
         "route": {"route_id": "POST /auth"},
         "route_function": {"function_id": "handler", "parameters": []},
@@ -307,6 +286,32 @@ def test_single_russian_service_call_is_inlined_during_merge():
     assert ":service_result = None;" in body
 
 
+def test_service_is_not_inlined_second_time_on_return_action():
+    merged = _merge_blocks(
+        [
+            {"kind": "action", "text": "Вызвать service.login_for_access_token(form_data, db)"},
+            {"kind": "action", "text": "Вернуть результат вызова service.login_for_access_token(form_data, db)"},
+        ],
+        [
+            {
+                "function_id": "src.auth.service.login_for_access_token",
+                "blocks": [
+                    {"kind": "action", "text": "token = create_access_token(user.username, user.id, token_expires)"},
+                    {"kind": "action", "text": "return model.Token(access_token=token, token_type='bearer')"},
+                    {"kind": "action", "text": "stop"},
+                ],
+                "current_puml": "@startuml\n@enduml\n",
+            }
+        ],
+    )
+
+    body = _render_blocks(merged)
+
+    assert body.count(":token = create_access_token(user.username, user.id, token_expires);") == 1
+    assert body.count(":service_result = model.Token(access_token=token, token_type='bearer');") == 1
+    assert ":Вернуть результат вызова service.login_for_access_token(form_data, db);" in body
+
+
 def test_russian_route_shell_actions_are_filtered_from_route_blocks():
     blocks = _filter_generated_blocks(
         [
@@ -485,6 +490,44 @@ def test_compress_blocks_prompt_uses_feedback_only_when_present(monkeypatch):
     assert "исправляешь предыдущую неудачную компрессию" in prompts[1]
     assert "Добавьте явное завершение успешного потока." in prompts[1]
     assert "не удаляй, не схлопывай и не маскируй" in prompts[1]
+
+
+def test_compress_blocks_cleans_logging_and_bare_raise_locally(monkeypatch):
+    def fake_chat_json(*args, **kwargs):
+        return {
+            "blocks": [
+                {
+                    "kind": "if",
+                    "condition": "ошибка при выполнении",
+                    "then": [
+                        {"kind": "action", "text": "logging.error(f'Error: {e}')"},
+                        {"kind": "action", "text": "raise"},
+                        {"kind": "action", "text": "end"},
+                    ],
+                    "else": [
+                        {"kind": "action", "text": "db.commit()"},
+                        {"kind": "action", "text": "stop"},
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    result = compress_blocks_node(
+        {
+            "route_function": {"parameters": []},
+            "current_blocks": [{"kind": "action", "text": "db.commit()"}],
+            "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+        }
+    )
+
+    body = _render_blocks(result["compressed_blocks"])
+
+    assert ":logging.error(f'Error: {e}');" not in body
+    assert ":raise;" not in body
+    assert "    end" in body.splitlines()
+    assert ":db.commit();" in body
 
 
 def test_route_after_validation_allows_three_retries_and_raises_on_fourth():
