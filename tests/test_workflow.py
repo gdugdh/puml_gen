@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from src.generator import generate_from_file
 from src.llm import LLMConfig
 from src.workflow import _deterministic_validate
 from src.workflow import _filter_generated_blocks
+from src.workflow import _merge_blocks
+from src.workflow import _prepare_generated_blocks
 from src.workflow import _render_blocks
 from src.workflow import validate_puml_node
 
@@ -68,12 +69,13 @@ def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeyp
 
     assert "title POST /auth" in route_puml
     assert ":Persist user;" in route_puml
+    assert route_puml.endswith("stop\n@enduml\n")
     assert service_puml.startswith("@startuml\n")
     assert "title src.auth.service.register_user" in service_puml
     assert "\nstart\n" in service_puml
-    assert ":user = User from payload;" in service_puml
-    assert ":Return;" in service_puml
-    assert service_puml.endswith("end\n@enduml\n")
+    assert ":Persist user;" in service_puml
+    assert ":Return;" not in service_puml
+    assert service_puml.endswith("stop\n@enduml\n")
 
 
 def test_control_flow_noise_does_not_break_puml_validation():
@@ -118,6 +120,165 @@ def test_else_only_if_is_rendered_as_non_empty_then_branch():
     assert "if (not User registration is successful) then (+)" in body
     assert ":Handle registration failure;" in body
     assert "else (-)" not in body
+
+
+def test_raise_and_return_actions_render_as_terminal_blocks():
+    blocks = _prepare_generated_blocks(
+        [
+            {"kind": "action", "text": "Raise AuthenticationError"},
+            {"kind": "action", "text": "Return token_response"},
+        ],
+        route_function={"parameters": []},
+        append_stop=False,
+    )
+
+    body = _render_blocks(blocks)
+
+    assert ":Raise AuthenticationError;" in body
+    assert "end" in body.splitlines()
+    assert ":Return token_response;" in body
+    assert "stop" in body.splitlines()
+
+
+def test_unsupported_try_wrapper_is_flattened_without_losing_success_path():
+    blocks = _prepare_generated_blocks(
+        [
+            {
+                "kind": "try",
+                "then": [
+                    {"kind": "action", "text": "Create User entity"},
+                    {"kind": "action", "text": "Commit user in DB"},
+                    {"kind": "return", "text": "Возвращаем None после успешного завершения."},
+                ],
+                "else": [
+                    {"kind": "action", "text": "Log registration error"},
+                    {"kind": "raise", "text": "raise"},
+                ],
+            }
+        ],
+        route_function={"parameters": []},
+        append_stop=True,
+    )
+
+    body = _render_blocks(blocks)
+
+    assert ":Create User entity;" in body
+    assert ":Commit user in DB;" in body
+    assert ":Возвращаем None после успешного завершения.;" in body
+    assert "if (ошибка при выполнении) then (+)" in body
+    assert ":Log registration error;" in body
+    assert "    end" in body.splitlines()
+    assert "stop" in body.splitlines()
+
+
+def test_linear_except_tail_is_rendered_as_error_branch():
+    blocks = _prepare_generated_blocks(
+        [
+            {"kind": "action", "text": "generated_user_id = uuid.uuid4()"},
+            {"kind": "action", "text": "db.commit()"},
+            {"kind": "action", "text": "None"},
+            {"kind": "action", "text": "stop"},
+            {"kind": "action", "text": "except Exception as e:"},
+            {"kind": "action", "text": "logging.error(f'Error: {e}')"},
+            {"kind": "action", "text": "raise"},
+            {"kind": "action", "text": "end"},
+        ],
+        route_function={"parameters": []},
+        append_stop=True,
+    )
+
+    body = _render_blocks(blocks)
+
+    assert "except Exception as e" not in body
+    assert "if (ошибка при выполнении) then (+)" in body
+    assert ":logging.error(f'Error: {e}');" in body
+    assert ":raise;" in body
+    assert "    end" in body.splitlines()
+    assert "else (-)" in body
+    assert ":generated_user_id = uuid.uuid4();" in body
+    assert ":db.commit();" in body
+    assert ":return None;" in body
+    assert "    stop" in body.splitlines()
+
+
+def test_service_return_is_rewritten_when_merged_into_route():
+    merged = _merge_blocks(
+        [{"kind": "action", "text": "token = auth_service.login(form_data)"}],
+        [
+            {
+                "function_id": "src.auth.service.login",
+                "blocks": [
+                    {"kind": "action", "text": "token = create_access_token(user.username, user.id, token_expires)"},
+                    {
+                        "kind": "action",
+                        "text": "return model.Token(access_token=token, token_type='bearer')",
+                    },
+                    {"kind": "action", "text": "stop"},
+                ],
+                "current_puml": "@startuml\n@enduml\n",
+            }
+        ],
+    )
+
+    body = _render_blocks(merged)
+
+    assert ":token = auth_service.login(form_data);" in body
+    assert ":token = create_access_token(user.username, user.id, token_expires);" in body
+    assert ":service_result = model.Token(access_token=token, token_type='bearer');" in body
+    assert "return model.Token" not in body
+    assert "stop" not in body.splitlines()
+
+
+def test_single_russian_service_call_is_inlined_during_merge():
+    merged = _merge_blocks(
+        [{"kind": "action", "text": "Вызвать сервис для регистрации пользователя с параметрами db и register_user_request."}],
+        [
+            {
+                "function_id": "src.auth.service.register_user",
+                "blocks": [
+                    {"kind": "action", "text": "generated_user_id = uuid.uuid4()"},
+                    {"kind": "action", "text": "return None"},
+                    {"kind": "action", "text": "stop"},
+                ],
+                "current_puml": "@startuml\n@enduml\n",
+            }
+        ],
+    )
+
+    body = _render_blocks(merged)
+
+    assert ":Вызвать сервис для регистрации пользователя с параметрами db и register_user_request.;" in body
+    assert ":generated_user_id = uuid.uuid4();" in body
+    assert ":service_result = None;" in body
+
+
+def test_russian_route_shell_actions_are_filtered_from_route_blocks():
+    blocks = _filter_generated_blocks(
+        [
+            {"kind": "action", "text": "Получить запрос на регистрацию пользователя."},
+            {"kind": "action", "text": "Вызвать сервис для регистрации пользователя с параметрами db и register_user_request."},
+            {
+                "kind": "if",
+                "condition": "если регистрация прошла успешно",
+                "then": [
+                    {"kind": "action", "text": "Вернуть ответ с кодом 201."},
+                    {"kind": "action", "text": "stop"},
+                ],
+                "else": [
+                    {"kind": "action", "text": "Обработать ошибку регистрации."},
+                    {"kind": "action", "text": "end"},
+                ],
+            },
+        ],
+        route_function={"parameters": []},
+    )
+
+    body = _render_blocks(blocks)
+
+    assert "Получить запрос" not in body
+    assert "Вернуть ответ с кодом 201" not in body
+    assert "Вызвать сервис для регистрации пользователя" in body
+    assert "Обработать ошибку регистрации" in body
 
 
 def _small_ir() -> dict[str, object]:
