@@ -63,6 +63,33 @@ def test_validate_puml_node_includes_suggested_fix_and_resets_retry_count(monkey
     assert result["validation_feedback"] == ""
 
 
+def test_validate_puml_node_ignores_warning_feedback(monkeypatch):
+    def fake_chat_json(*args, **kwargs):
+        return {
+            "is_valid": True,
+            "critical_feedback": "",
+            "warning_feedback": "Можно сделать шаг явнее",
+            "suggested_fix": "",
+        }
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    state = {
+        "route": {"route_id": "POST /auth"},
+        "route_function": {"function_id": "handler", "parameters": []},
+        "service_functions": [],
+        "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+        "current_puml": "@startuml\ntitle POST /auth\nstart\n:Do work;\nstop\n@enduml\n",
+        "retry_count": 1,
+    }
+
+    result = validate_puml_node(state)
+
+    assert result["validator_passed"] is True
+    assert result["retry_count"] == 0
+    assert result["validation_feedback"] == ""
+
+
 def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeypatch):
     input_path = tmp_path / "input.json"
     output_dir = tmp_path / "output"

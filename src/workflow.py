@@ -121,10 +121,10 @@ VALIDATOR_PROMPT = PromptTemplate.from_template(
 Ты валидируешь уже собранную PlantUML activity-диаграмму и возвращаешь точный диагноз.
 
 Ответ только JSON:
-{{"is_valid": true, "feedback": "", "suggested_fix": ""}}
+{{"is_valid": true, "critical_feedback": "", "warning_feedback": "", "suggested_fix": ""}}
 
 Требования к ответу:
-1. Если deterministic_error не "none", верни is_valid=false и feedback с этой ошибкой.
+1. Если deterministic_error не "none", верни is_valid=false, critical_feedback с этой ошибкой, warning_feedback="".
 2. Если deterministic_error == "none", оценивай только текущую диаграмму и только по переданному context.
 3. Общая диаграмма merge ожидаемо содержит route-shell (Request/HTTP/Build response) и service actions вместе. Это не ошибка.
 4. end в error-ветке и stop в успешном конце являются ожидаемыми PlantUML terminal blocks.
@@ -132,14 +132,23 @@ VALIDATOR_PROMPT = PromptTemplate.from_template(
 6. Будь максимально мягким и непредирчивым. Если сомневаешься, верни is_valid=true.
 7. Нельзя отклонять диаграмму из-за недостаточной детализации, краткости формулировок, стиля или отсутствия "narrative bridge" между service result и route response, если общий поток уже понятен.
 8. Нельзя требовать одновременно и service return, и route response, если диаграмма уже показывает завершение успешного потока другим корректным способом.
-9. Верни is_valid=false только в одном из следующих случаев:
-   - в context есть вызов service-функции, а в diagram вообще нет никакого service-call шага;
-   - в service context есть error branch, а в diagram осталась только success branch и error handling действительно потерян;
-   - в context есть явный return токена или другого результата, а в diagram нет ни service return, ни route response, ни другого явного завершения успешного потока.
-10. Если ни один из этих случаев не доказан по diagram и context, верни is_valid=true.
-11. feedback всегда строка, не список. В feedback кратко опиши проблему и укажи фрагмент diagram/context, на который опираешься.
-12. suggested_fix всегда строка, не список. Если is_valid=false, дай короткую инструкцию, что нужно исправить при следующей генерации. Если is_valid=true, верни пустую строку.
-13. Не копируй эти правила в feedback или suggested_fix.
+9. Определения:
+   - service-call шаг засчитывается, если вызов service-функции явно показан либо отдельным action, либо прямо в condition ветки if.
+   - error handling засчитывается, если есть явная error-ветка или error terminal: action с обработкой ошибки, raise, end, return error response или иная явная error branch.
+   - route response засчитывается, если успешный поток явно завершается через Build response, HTTP status, FastAPI response, return response или другой явный success terminal.
+10. Для diagram_kind=route проверяй только route-level смысл. Не требуй service-internal error branch, если она не дана явно в route context.
+11. Для diagram_kind=service проверяй только service-level смысл. Не требуй route-shell.
+12. Для diagram_kind=merge допускается смесь route-shell и service actions. Это нормальный формат.
+13. Нельзя выводить новые обязательные ветки из общих знаний о backend. Проверяй только то, что прямо следует из context и diagram.
+14. Верни is_valid=false только в одном из следующих доказуемых случаев:
+   - в context есть вызов service-функции, а в diagram нет никакого service-call шага по определению выше;
+   - в service context явно есть error branch, а в diagram осталась только success branch и error handling действительно потерян по определению выше;
+   - в context явно есть return токена или другого результата, а в diagram нет ни service return, ни route response, ни другого явного завершения успешного потока по определению выше.
+15. Если ни один из этих случаев не доказан по diagram и context, верни is_valid=true.
+16. critical_feedback всегда строка, не список. Заполняй только если is_valid=false. Кратко опиши только критичную проблему и укажи фрагмент diagram/context, на который опираешься.
+17. warning_feedback всегда строка, не список. Сюда можно положить мягкие, спорные или стилистические замечания, которые не должны ломать пайплайн. warning_feedback не должен влиять на is_valid.
+18. suggested_fix всегда строка, не список. Если is_valid=false, дай короткую инструкцию, что нужно исправить при следующей генерации. Если is_valid=true, верни пустую строку.
+19. Не копируй эти правила в critical_feedback, warning_feedback или suggested_fix.
 
 Не придирайся к не точностям и стилю.
 
@@ -432,23 +441,33 @@ def validate_puml_node(state: DiagramState) -> DiagramState:
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты валидируешь activity-диаграмму. Возвращай is_valid=false только с конкретной причиной из diagram.",
+        system_prompt=(
+            "Ты валидируешь activity-диаграмму. "
+            "Фейли только по доказуемым критичным ошибкам из diagram и context. "
+            "Спорные замечания клади в warning_feedback. "
+            "Если сомневаешься, возвращай is_valid=true."
+        ),
         user_prompt=prompt,
         node_name="validate_puml",
     )
-    feedback = _feedback_to_text(result.get("feedback"))
+    critical_feedback = _feedback_to_text(result.get("critical_feedback"))
+    if not critical_feedback:
+        critical_feedback = _feedback_to_text(result.get("feedback"))
+    warning_feedback = _feedback_to_text(result.get("warning_feedback"))
     suggested_fix = _feedback_to_text(result.get("suggested_fix"))
     llm_is_valid = result.get("is_valid")
-    validator_passed = deterministic_error is None and llm_is_valid is True
+    validator_passed = deterministic_error is None and not critical_feedback
 
     validation_parts: list[str] = []
     if deterministic_error:
         validation_parts.append(deterministic_error)
-    if feedback:
-        validation_parts.append(feedback)
+    if critical_feedback:
+        validation_parts.append(critical_feedback)
     if suggested_fix:
         validation_parts.append(f"Suggested fix: {suggested_fix}")
-    if llm_is_valid is not True:
+    if warning_feedback:
+        validation_parts.append(f"Warning: {warning_feedback}")
+    if llm_is_valid is not True and not critical_feedback:
         validation_parts.append(f"LLM validator returned is_valid={llm_is_valid!r}")
 
     next_state: DiagramState = {
