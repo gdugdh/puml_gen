@@ -1,0 +1,30 @@
+@startuml
+title POST /gateway/batch/stream
+start
+
+:Request;
+note: R1
+:**items** = Request.Body.items;
+note: list[src.interfaces.schemas.gateway.GatewayBatchItem]
+:**svc** = Request.Dependency.svc;
+note: src.application.services.gateway_app_service.GatewayApplicationService
+
+:Вызвать функцию gen() для получения потока svc.stream_batch_sse(items);
+:for item in items;
+:resp = await self._llm.send(dict(item.payload));
+:data = {'id': item.id, 'payload': resp};
+if (Exception as e) then (+)
+    :data = {'id': item.id, 'error': {'message': 'Orchestrator request failed', 'details': str(e)}};
+    :yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n";
+else (-)
+    :yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n";
+endif
+:yield 'data: [DONE]\n\n';
+end
+:Вернуть StreamingResponse с потоком и типом media_type='text/event-stream';
+
+:Build response\nwith **StreamingResponse**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

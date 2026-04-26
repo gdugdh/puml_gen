@@ -1,0 +1,8 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.get_test
+start
+
+:self._require_test_dir(test_id);
+:return {'id': test_id, 'name': test_id, 'status': get_test_status(test_id), 'requests': self._build_requests_view(test_id)};
+stop
+@enduml

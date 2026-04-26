@@ -1,0 +1,23 @@
+@startuml
+title POST /tests/{test_id}/run
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Запланировать выполнение теста, вызвав await svc.schedule_test_run(test_id).;
+:self._require_test_dir(test_id);
+:service = RunTestService(self._storage, self._llm_client_factory());
+:asyncio.create_task(service.run_with_status(test_id));
+:service_result = {'status': 'started'};
+:Вернуть результат выполнения await svc.schedule_test_run(test_id).;
+
+:Build response\nwith **dict[str, str]**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

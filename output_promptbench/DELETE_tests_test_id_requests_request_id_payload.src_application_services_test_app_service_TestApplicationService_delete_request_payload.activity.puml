@@ -1,0 +1,14 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.delete_request_payload
+start
+
+:self._require_test_dir(test_id);
+:request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json');
+if (not os.path.exists(request_path)) then (+)
+    :await self._storage.remove_file(request_path);
+endif
+:responses_dir = os.path.join(self._test_dir(test_id), 'responses');
+:for suffix in ('.json', '.meta.json', '.error.json'): await self._storage.remove_file(os.path.join(responses_dir, f'response_{request_id}{suffix}'));
+:return {'status': 'deleted', 'test_id': test_id, 'request_id': request_id};
+stop
+@enduml

@@ -1,0 +1,20 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.get_request_response
+start
+
+:self._require_test_dir(test_id);
+:responses_dir = os.path.join(self._test_dir(test_id), 'responses');
+:ok_path = os.path.join(responses_dir, f'response_{request_id}.json');
+:meta_path = os.path.join(responses_dir, f'response_{request_id}.meta.json');
+:err_path = os.path.join(responses_dir, f'response_{request_id}.error.json');
+:ok = await self._storage.read_json(ok_path) if os.path.exists(ok_path) else None;
+:meta = await self._storage.read_json(meta_path) if os.path.exists(meta_path) else None;
+:err = await self._storage.read_json(err_path) if os.path.exists(err_path) else None;
+if (ok is None and meta is None and err is None) then (+)
+    end
+else (-)
+    :return {'test_id': test_id, 'request_id': request_id, 'ok_file_path': ok_path if os.path.exists(ok_path) else None, 'meta_file_path': meta_path if os.path.exists(meta_path) else None, 'error_file_path': err_path if os.path.exists(err_path) else None, 'response': ok, 'meta': meta, 'error': err};
+    stop
+endif
+stop
+@enduml

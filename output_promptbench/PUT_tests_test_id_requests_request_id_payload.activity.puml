@@ -1,0 +1,29 @@
+@startuml
+title PUT /tests/{test_id}/requests/{request_id}/payload
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**request_id** = Request.Path.request_id;
+note: str
+:**data** = Request.Body.data;
+note: src.interfaces.schemas.request.RequestCreate
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Вызвать метод svc.save_request_payload с параметрами test_id, request_id, data.payload;
+:self._require_test_dir(test_id);
+:request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json');
+if (not os.path.exists(request_path)) then (+)
+    :await self._storage.save_json(request_path, payload);
+endif
+:service_result = {'status': 'saved', 'test_id': test_id, 'request_id': request_id, 'file_path': request_path};
+:Вернуть результат вызова метода svc.save_request_payload;
+
+:Build response\nwith **dict[str, Any]**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

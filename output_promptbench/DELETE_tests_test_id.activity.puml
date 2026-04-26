@@ -1,0 +1,22 @@
+@startuml
+title DELETE /tests/{test_id}
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Вызвать метод удаления теста у сервиса svc с идентификатором test_id;
+:test_dir = self._require_test_dir(test_id);
+:await self._storage.remove_tree(test_dir);
+:service_result = {'status': 'deleted'};
+:Вернуть результат выполнения метода удаления теста;
+
+:Build response\nwith **dict[str, str]**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

@@ -1,0 +1,12 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.create_test
+start
+
+:os.makedirs(settings.STORAGE, exist_ok=True);
+:test_id = unique_test_id(settings.STORAGE, name);
+:test_dir = self._test_dir(test_id);
+:os.makedirs(os.path.join(test_dir, 'requests'), exist_ok=True);
+:os.makedirs(os.path.join(test_dir, 'responses'), exist_ok=True);
+:return {'id': test_id, 'name': test_id, 'status': get_test_status(test_id), 'requests': self._build_requests_view(test_id)};
+stop
+@enduml

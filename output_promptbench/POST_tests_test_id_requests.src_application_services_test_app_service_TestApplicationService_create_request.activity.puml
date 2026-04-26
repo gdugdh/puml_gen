@@ -1,0 +1,13 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.create_request
+start
+
+:test_dir = self._require_test_dir(test_id);
+:requests_dir = os.path.join(test_dir, 'requests');
+:os.makedirs(requests_dir, exist_ok=True);
+:rid = self._next_request_id(requests_dir, name);
+:file_path = os.path.join(requests_dir, f'{rid}.json');
+:await self._storage.save_json(file_path, payload);
+:return {'id': rid, 'test_id': test_id, 'file_path': file_path, 'status': 'pending'};
+stop
+@enduml

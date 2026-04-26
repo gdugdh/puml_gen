@@ -1,0 +1,35 @@
+@startuml
+title GET /tests/{test_id}/requests/{request_id}/response
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**request_id** = Request.Path.request_id;
+note: str
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Получить сервис svc через зависимость.;
+:Вызвать метод await svc.get_request_response(test_id, request_id).;
+:self._require_test_dir(test_id);
+:responses_dir = os.path.join(self._test_dir(test_id), 'responses');
+:ok_path = os.path.join(responses_dir, f'response_{request_id}.json');
+:meta_path = os.path.join(responses_dir, f'response_{request_id}.meta.json');
+:err_path = os.path.join(responses_dir, f'response_{request_id}.error.json');
+:ok = await self._storage.read_json(ok_path) if os.path.exists(ok_path) else None;
+:meta = await self._storage.read_json(meta_path) if os.path.exists(meta_path) else None;
+:err = await self._storage.read_json(err_path) if os.path.exists(err_path) else None;
+if (ok is None and meta is None and err is None) then (+)
+    end
+else (-)
+    :service_result = {'test_id': test_id, 'request_id': request_id, 'ok_file_path': ok_path if os.path.exists(ok_path) else None, 'meta_file_path': meta_path if os.path.exists(meta_path) else None, 'error_file_path': err_path if os.path.exists(err_path) else None, 'response': ok, 'meta': meta, 'error': err};
+endif
+:Вернуть результат вызова await svc.get_request_response(test_id, request_id).;
+
+:Build response\nwith **dict[str, Any]**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

@@ -1,0 +1,14 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.get_request_payload
+start
+
+:self._require_test_dir(test_id);
+:request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json');
+if (not os.path.exists(request_path)) then (+)
+    :data = await self._storage.read_json(request_path);
+else (-)
+    end
+endif
+:return {'test_id': test_id, 'request_id': request_id, 'file_path': request_path, 'payload': data};
+stop
+@enduml

@@ -1,0 +1,9 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.delete_test
+start
+
+:test_dir = self._require_test_dir(test_id);
+:await self._storage.remove_tree(test_dir);
+:return {'status': 'deleted'};
+stop
+@enduml

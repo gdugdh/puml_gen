@@ -1,0 +1,9 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.list_tests
+start
+
+:testIds = list_test_ids();
+:tests = [{'id': tid, 'name': tid, 'status': get_test_status(tid)} for tid in testIds];
+:return tests;
+stop
+@enduml

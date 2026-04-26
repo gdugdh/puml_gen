@@ -1,0 +1,25 @@
+@startuml
+title GET /tests/{test_id}/progress
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Вызвать метод svc.get_progress с параметром test_id.;
+if (not os.path.exists(self._test_dir(test_id))) then (+)
+    :raise FileNotFoundError('Тест не найден');
+    end
+else (-)
+    :service_result = get_progress(test_id);
+endif
+:Вернуть результат вызова svc.get_progress(test_id).;
+
+:Build response\nwith **ProgressResponse**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

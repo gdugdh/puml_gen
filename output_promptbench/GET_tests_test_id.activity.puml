@@ -1,0 +1,21 @@
+@startuml
+title GET /tests/{test_id}
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Вызвать метод svc.get_test с параметром test_id.;
+:self._require_test_dir(test_id);
+:service_result = {'id': test_id, 'name': test_id, 'status': get_test_status(test_id), 'requests': self._build_requests_view(test_id)};
+:Вернуть результат вызова svc.get_test(test_id).;
+
+:Build response\nwith **TestRead**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

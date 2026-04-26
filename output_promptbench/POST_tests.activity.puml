@@ -1,0 +1,25 @@
+@startuml
+title POST /tests
+start
+
+:Request;
+note: R1
+:**data** = Request.Body.data;
+note: src.interfaces.schemas.test.TestCreate
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Вызвать метод svc.create_test с параметром data.name;
+:os.makedirs(settings.STORAGE, exist_ok=True);
+:test_id = unique_test_id(settings.STORAGE, name);
+:test_dir = self._test_dir(test_id);
+:os.makedirs(os.path.join(test_dir, 'requests'), exist_ok=True);
+:os.makedirs(os.path.join(test_dir, 'responses'), exist_ok=True);
+:service_result = {'id': test_id, 'name': test_id, 'status': get_test_status(test_id), 'requests': self._build_requests_view(test_id)};
+:Вернуть результат вызова svc.create_test(data.name);
+
+:Build response\nwith **TestRead**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

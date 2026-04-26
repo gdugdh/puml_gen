@@ -1,0 +1,1077 @@
+{
+  "schema_version": "synthetic-ir.v1",
+  "purpose": "Manual synthetic IR for PromptBench routes and application services.",
+  "coverage": {
+    "included": "HTTP routes with direct application-service flow from PromptBench.",
+    "excluded": [
+      "GET /healthcheck",
+      "WS /tests/ws/{test_id}"
+    ],
+    "exclusion_reason": "Current generator expects each route to reference a service function; healthcheck and websocket flow do not fit that shape."
+  },
+  "repo": {
+    "name": "PromptBench",
+    "root": "projects_for_test/PromptBench",
+    "entrypoint_module": "src.main",
+    "entrypoint_file": "projects_for_test/PromptBench/src/main.py",
+    "route_registration": {
+      "module": "src.main",
+      "file": "projects_for_test/PromptBench/src/main.py",
+      "steps": [
+        {
+          "kind": "create_app",
+          "source": "app = FastAPI(lifespan=lifespan, title='PromptBench', description='Примерное API для прогона промптов и параметров')"
+        },
+        {
+          "kind": "include_router",
+          "router": "src.interfaces.api.endpoints.tests.router",
+          "source": "app.include_router(tests_router)"
+        },
+        {
+          "kind": "include_router",
+          "router": "src.interfaces.api.endpoints.gateway.router",
+          "source": "app.include_router(gateway_router)"
+        }
+      ]
+    }
+  },
+  "functions": [
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.create_test",
+      "name": "create_test",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def create_test(data: TestCreate, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "POST",
+        "path": "/tests"
+      },
+      "parameters": [
+        {
+          "name": "data",
+          "location": "body",
+          "type": "src.interfaces.schemas.test.TestCreate"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "create_test(data, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "svc.create_test(data.name)"
+        },
+        {
+          "kind": "return",
+          "source": "return svc.create_test(data.name)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.get_test",
+      "name": "get_test",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def get_test(test_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "GET",
+        "path": "/tests/{test_id}"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "get_test(test_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "svc.get_test(test_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return svc.get_test(test_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.list_tests",
+      "name": "list_tests",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def list_tests(svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "GET",
+        "path": "/tests"
+      },
+      "parameters": [
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "list_tests(svc)"
+        },
+        {
+          "kind": "call",
+          "source": "svc.list_tests()"
+        },
+        {
+          "kind": "return",
+          "source": "return svc.list_tests()"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.create_request",
+      "name": "create_request",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def create_request(test_id: str, data: RequestCreate, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "POST",
+        "path": "/tests/{test_id}/requests"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "data",
+          "location": "body",
+          "type": "src.interfaces.schemas.request.RequestCreate"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "create_request(test_id, data, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.create_request(test_id, data.payload, data.name)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.create_request(test_id, data.payload, data.name)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.delete_test",
+      "name": "delete_test",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def delete_test(test_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "DELETE",
+        "path": "/tests/{test_id}"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "delete_test(test_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.delete_test(test_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.delete_test(test_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.run_test",
+      "name": "run_test",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def run_test(test_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "POST",
+        "path": "/tests/{test_id}/run"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "run_test(test_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.schedule_test_run(test_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.schedule_test_run(test_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.get_request_payload",
+      "name": "get_request_payload",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def get_request_payload(test_id: str, request_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "GET",
+        "path": "/tests/{test_id}/requests/{request_id}/payload"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "request_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "get_request_payload(test_id, request_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.get_request_payload(test_id, request_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.get_request_payload(test_id, request_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.save_request_payload",
+      "name": "save_request_payload",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def save_request_payload(test_id: str, request_id: str, data: RequestCreate, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "PUT",
+        "path": "/tests/{test_id}/requests/{request_id}/payload"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "request_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "data",
+          "location": "body",
+          "type": "src.interfaces.schemas.request.RequestCreate"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "save_request_payload(test_id, request_id, data, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.save_request_payload(test_id, request_id, data.payload)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.save_request_payload(test_id, request_id, data.payload)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.delete_request_payload",
+      "name": "delete_request_payload",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def delete_request_payload(test_id: str, request_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "DELETE",
+        "path": "/tests/{test_id}/requests/{request_id}/payload"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "request_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "delete_request_payload(test_id, request_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.delete_request_payload(test_id, request_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.delete_request_payload(test_id, request_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.get_request_response",
+      "name": "get_request_response",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def get_request_response(test_id: str, request_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "GET",
+        "path": "/tests/{test_id}/requests/{request_id}/response"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "request_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "get_request_response(test_id, request_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "await svc.get_request_response(test_id, request_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return await svc.get_request_response(test_id, request_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.tests.get_progress_route",
+      "name": "get_progress_route",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.tests",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/tests.py",
+      "async": true,
+      "signature": "async def get_progress_route(test_id: str, svc: TestApplicationService = Depends(get_test_application_service))",
+      "http": {
+        "method": "GET",
+        "path": "/tests/{test_id}/progress"
+      },
+      "parameters": [
+        {
+          "name": "test_id",
+          "location": "path",
+          "type": "str"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.test_app_service.TestApplicationService",
+          "provider": "src.infrastructure.di.get_test_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "get_progress_route(test_id, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "svc.get_progress(test_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return svc.get_progress(test_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.interfaces.api.endpoints.gateway.gateway_batch_stream",
+      "name": "gateway_batch_stream",
+      "kind": "route_handler",
+      "module": "src.interfaces.api.endpoints.gateway",
+      "file": "projects_for_test/PromptBench/src/interfaces/api/endpoints/gateway.py",
+      "async": true,
+      "signature": "async def gateway_batch_stream(items: list[GatewayBatchItem], svc: GatewayApplicationService = Depends(get_gateway_application_service))",
+      "http": {
+        "method": "POST",
+        "path": "/gateway/batch/stream"
+      },
+      "parameters": [
+        {
+          "name": "items",
+          "location": "body",
+          "type": "list[src.interfaces.schemas.gateway.GatewayBatchItem]"
+        },
+        {
+          "name": "svc",
+          "location": "dependency",
+          "type": "src.application.services.gateway_app_service.GatewayApplicationService",
+          "provider": "src.infrastructure.di.get_gateway_application_service"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "receive_request",
+          "source": "gateway_batch_stream(items, svc)"
+        },
+        {
+          "kind": "call",
+          "source": "gen() -> svc.stream_batch_sse(items)"
+        },
+        {
+          "kind": "return",
+          "source": "return StreamingResponse(gen(), media_type='text/event-stream')"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.create_test",
+      "name": "create_test",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "def create_test(self, name: str) -> dict[str, Any]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "os.makedirs(settings.STORAGE, exist_ok=True)"
+        },
+        {
+          "kind": "call",
+          "source": "test_id = unique_test_id(settings.STORAGE, name)"
+        },
+        {
+          "kind": "assign",
+          "source": "test_dir = self._test_dir(test_id)"
+        },
+        {
+          "kind": "call",
+          "source": "os.makedirs(os.path.join(test_dir, 'requests'), exist_ok=True)"
+        },
+        {
+          "kind": "call",
+          "source": "os.makedirs(os.path.join(test_dir, 'responses'), exist_ok=True)"
+        },
+        {
+          "kind": "return",
+          "source": "return {'id': test_id, 'name': test_id, 'status': get_test_status(test_id), 'requests': self._build_requests_view(test_id)}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.get_test",
+      "name": "get_test",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "def get_test(self, test_id: str) -> dict[str, Any]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "return",
+          "source": "return {'id': test_id, 'name': test_id, 'status': get_test_status(test_id), 'requests': self._build_requests_view(test_id)}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.list_tests",
+      "name": "list_tests",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "def list_tests(self) -> list[dict[str, Any]]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "list_test_ids()"
+        },
+        {
+          "kind": "return",
+          "source": "return [{'id': tid, 'name': tid, 'status': get_test_status(tid)} for tid in list_test_ids()]"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.create_request",
+      "name": "create_request",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def create_request(self, test_id: str, payload: dict[str, Any], name: str | None) -> dict[str, Any]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "test_dir = self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "assign",
+          "source": "requests_dir = os.path.join(test_dir, 'requests')"
+        },
+        {
+          "kind": "call",
+          "source": "os.makedirs(requests_dir, exist_ok=True)"
+        },
+        {
+          "kind": "call",
+          "source": "rid = self._next_request_id(requests_dir, name)"
+        },
+        {
+          "kind": "assign",
+          "source": "file_path = os.path.join(requests_dir, f'{rid}.json')"
+        },
+        {
+          "kind": "call",
+          "source": "await self._storage.save_json(file_path, payload)"
+        },
+        {
+          "kind": "return",
+          "source": "return {'id': rid, 'test_id': test_id, 'file_path': file_path, 'status': 'pending'}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.delete_test",
+      "name": "delete_test",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def delete_test(self, test_id: str) -> dict[str, str]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "test_dir = self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "call",
+          "source": "await self._storage.remove_tree(test_dir)"
+        },
+        {
+          "kind": "return",
+          "source": "return {'status': 'deleted'}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.schedule_test_run",
+      "name": "schedule_test_run",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def schedule_test_run(self, test_id: str) -> dict[str, str]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "construct_service",
+          "source": "service = RunTestService(self._storage, self._llm_client_factory())"
+        },
+        {
+          "kind": "call",
+          "source": "asyncio.create_task(service.run_with_status(test_id))"
+        },
+        {
+          "kind": "return",
+          "source": "return {'status': 'started'}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.get_request_payload",
+      "name": "get_request_payload",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def get_request_payload(self, test_id: str, request_id: str) -> dict[str, Any]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "assign",
+          "source": "request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json')"
+        },
+        {
+          "kind": "if",
+          "condition": "not os.path.exists(request_path)",
+          "then": [
+            {
+              "kind": "action",
+              "text": "raise NotFoundError('Request payload not found')"
+            },
+            {
+              "kind": "action",
+              "text": "end"
+            }
+          ]
+        },
+        {
+          "kind": "call",
+          "source": "data = await self._storage.read_json(request_path)"
+        },
+        {
+          "kind": "return",
+          "source": "return {'test_id': test_id, 'request_id': request_id, 'file_path': request_path, 'payload': data}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.save_request_payload",
+      "name": "save_request_payload",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def save_request_payload(self, test_id: str, request_id: str, payload: dict[str, Any]) -> dict[str, Any]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "assign",
+          "source": "request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json')"
+        },
+        {
+          "kind": "if",
+          "condition": "not os.path.exists(request_path)",
+          "then": [
+            {
+              "kind": "action",
+              "text": "raise NotFoundError('Request payload not found')"
+            },
+            {
+              "kind": "action",
+              "text": "end"
+            }
+          ]
+        },
+        {
+          "kind": "call",
+          "source": "await self._storage.save_json(request_path, payload)"
+        },
+        {
+          "kind": "return",
+          "source": "return {'status': 'saved', 'test_id': test_id, 'request_id': request_id, 'file_path': request_path}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.delete_request_payload",
+      "name": "delete_request_payload",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def delete_request_payload(self, test_id: str, request_id: str) -> dict[str, str]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "assign",
+          "source": "request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json')"
+        },
+        {
+          "kind": "if",
+          "condition": "not os.path.exists(request_path)",
+          "then": [
+            {
+              "kind": "action",
+              "text": "raise NotFoundError('Request payload not found')"
+            },
+            {
+              "kind": "action",
+              "text": "end"
+            }
+          ]
+        },
+        {
+          "kind": "call",
+          "source": "await self._storage.remove_file(request_path)"
+        },
+        {
+          "kind": "assign",
+          "source": "responses_dir = os.path.join(self._test_dir(test_id), 'responses')"
+        },
+        {
+          "kind": "loop",
+          "source": "for suffix in ('.json', '.meta.json', '.error.json'): await self._storage.remove_file(os.path.join(responses_dir, f'response_{request_id}{suffix}'))"
+        },
+        {
+          "kind": "return",
+          "source": "return {'status': 'deleted', 'test_id': test_id, 'request_id': request_id}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.get_request_response",
+      "name": "get_request_response",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "async def get_request_response(self, test_id: str, request_id: str) -> dict[str, Any]",
+      "steps": [
+        {
+          "kind": "call",
+          "source": "self._require_test_dir(test_id)"
+        },
+        {
+          "kind": "assign",
+          "source": "responses_dir = os.path.join(self._test_dir(test_id), 'responses')"
+        },
+        {
+          "kind": "assign",
+          "source": "ok_path = os.path.join(responses_dir, f'response_{request_id}.json')"
+        },
+        {
+          "kind": "assign",
+          "source": "meta_path = os.path.join(responses_dir, f'response_{request_id}.meta.json')"
+        },
+        {
+          "kind": "assign",
+          "source": "err_path = os.path.join(responses_dir, f'response_{request_id}.error.json')"
+        },
+        {
+          "kind": "call",
+          "source": "ok = await self._storage.read_json(ok_path) if os.path.exists(ok_path) else None"
+        },
+        {
+          "kind": "call",
+          "source": "meta = await self._storage.read_json(meta_path) if os.path.exists(meta_path) else None"
+        },
+        {
+          "kind": "call",
+          "source": "err = await self._storage.read_json(err_path) if os.path.exists(err_path) else None"
+        },
+        {
+          "kind": "if",
+          "condition": "ok is None and meta is None and err is None",
+          "then": [
+            {
+              "kind": "action",
+              "text": "raise NotFoundError('Response not found')"
+            },
+            {
+              "kind": "action",
+              "text": "end"
+            }
+          ]
+        },
+        {
+          "kind": "return",
+          "source": "return {'test_id': test_id, 'request_id': request_id, 'ok_file_path': ok_path if os.path.exists(ok_path) else None, 'meta_file_path': meta_path if os.path.exists(meta_path) else None, 'error_file_path': err_path if os.path.exists(err_path) else None, 'response': ok, 'meta': meta, 'error': err}"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.test_app_service.TestApplicationService.get_progress",
+      "name": "get_progress",
+      "kind": "service_entry",
+      "module": "src.application.services.test_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/test_app_service.py",
+      "signature": "def get_progress(self, test_id: str) -> dict[str, int]",
+      "steps": [
+        {
+          "kind": "if",
+          "condition": "not os.path.exists(self._test_dir(test_id))",
+          "then": [
+            {
+              "kind": "action",
+              "text": "raise NotFoundError('Test not found')"
+            },
+            {
+              "kind": "action",
+              "text": "end"
+            }
+          ]
+        },
+        {
+          "kind": "return",
+          "source": "return get_progress(test_id)"
+        }
+      ]
+    },
+    {
+      "function_id": "src.application.services.gateway_app_service.GatewayApplicationService.stream_batch_sse",
+      "name": "stream_batch_sse",
+      "kind": "service_entry",
+      "module": "src.application.services.gateway_app_service",
+      "file": "projects_for_test/PromptBench/src/application/services/gateway_app_service.py",
+      "signature": "async def stream_batch_sse(self, items: list[GatewayBatchItem]) -> AsyncIterator[str]",
+      "steps": [
+        {
+          "kind": "loop",
+          "source": "for item in items"
+        },
+        {
+          "kind": "call",
+          "source": "resp = await self._llm.send(dict(item.payload))"
+        },
+        {
+          "kind": "assign",
+          "source": "data = {'id': item.id, 'payload': resp}"
+        },
+        {
+          "kind": "except",
+          "source": "except Exception as e:"
+        },
+        {
+          "kind": "assign",
+          "source": "data = {'id': item.id, 'error': {'message': 'Orchestrator request failed', 'details': str(e)}}"
+        },
+        {
+          "kind": "yield",
+          "source": "yield f\"data: {json.dumps(data, ensure_ascii=False)}\\n\\n\""
+        },
+        {
+          "kind": "yield",
+          "source": "yield 'data: [DONE]\\n\\n'"
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "route_id": "POST /tests",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.create_test",
+      "response_model": "src.interfaces.schemas.test.TestRead",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.create_test"
+        ]
+      ]
+    },
+    {
+      "route_id": "GET /tests/{test_id}",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.get_test",
+      "response_model": "src.interfaces.schemas.test.TestRead",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.get_test"
+        ]
+      ]
+    },
+    {
+      "route_id": "GET /tests",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.list_tests",
+      "response_model": "list[src.interfaces.schemas.test.TestReadSimple]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.list_tests"
+        ]
+      ]
+    },
+    {
+      "route_id": "POST /tests/{test_id}/requests",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.create_request",
+      "response_model": "src.interfaces.schemas.request.RequestRead",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.create_request"
+        ]
+      ]
+    },
+    {
+      "route_id": "DELETE /tests/{test_id}",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.delete_test",
+      "response_model": "dict[str, str]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.delete_test"
+        ]
+      ]
+    },
+    {
+      "route_id": "POST /tests/{test_id}/run",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.run_test",
+      "response_model": "dict[str, str]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.schedule_test_run"
+        ]
+      ]
+    },
+    {
+      "route_id": "GET /tests/{test_id}/requests/{request_id}/payload",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.get_request_payload",
+      "response_model": "dict[str, Any]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.get_request_payload"
+        ]
+      ]
+    },
+    {
+      "route_id": "PUT /tests/{test_id}/requests/{request_id}/payload",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.save_request_payload",
+      "response_model": "dict[str, Any]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.save_request_payload"
+        ]
+      ]
+    },
+    {
+      "route_id": "DELETE /tests/{test_id}/requests/{request_id}/payload",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.delete_request_payload",
+      "response_model": "dict[str, str]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.delete_request_payload"
+        ]
+      ]
+    },
+    {
+      "route_id": "GET /tests/{test_id}/requests/{request_id}/response",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.get_request_response",
+      "response_model": "dict[str, Any]",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.get_request_response"
+        ]
+      ]
+    },
+    {
+      "route_id": "GET /tests/{test_id}/progress",
+      "handler_function_id": "src.interfaces.api.endpoints.tests.get_progress_route",
+      "response_model": "src.interfaces.schemas.test.ProgressResponse",
+      "service_function_groups": [
+        [
+          "src.application.services.test_app_service.TestApplicationService.get_progress"
+        ]
+      ]
+    },
+    {
+      "route_id": "POST /gateway/batch/stream",
+      "handler_function_id": "src.interfaces.api.endpoints.gateway.gateway_batch_stream",
+      "response_model": "starlette.responses.StreamingResponse",
+      "service_function_groups": [
+        [
+          "src.application.services.gateway_app_service.GatewayApplicationService.stream_batch_sse"
+        ]
+      ]
+    }
+  ]
+}

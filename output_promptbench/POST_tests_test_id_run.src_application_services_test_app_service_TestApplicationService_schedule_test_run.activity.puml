@@ -1,0 +1,10 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.schedule_test_run
+start
+
+:self._require_test_dir(test_id);
+:service = RunTestService(self._storage, self._llm_client_factory());
+:asyncio.create_task(service.run_with_status(test_id));
+:return {'status': 'started'};
+stop
+@enduml

@@ -1,0 +1,30 @@
+@startuml
+title DELETE /tests/{test_id}/requests/{request_id}/payload
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**request_id** = Request.Path.request_id;
+note: str
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Получить параметры test_id и request_id из пути.;
+:Вызвать метод delete_request_payload у svc с параметрами test_id и request_id.;
+:self._require_test_dir(test_id);
+:request_path = os.path.join(self._test_dir(test_id), 'requests', f'{request_id}.json');
+if (not os.path.exists(request_path)) then (+)
+    :await self._storage.remove_file(request_path);
+endif
+:responses_dir = os.path.join(self._test_dir(test_id), 'responses');
+:for suffix in ('.json', '.meta.json', '.error.json'): await self._storage.remove_file(os.path.join(responses_dir, f'response_{request_id}{suffix}'));
+:service_result = {'status': 'deleted', 'test_id': test_id, 'request_id': request_id};
+:Вернуть результат вызова метода delete_request_payload.;
+
+:Build response\nwith **dict[str, str]**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml

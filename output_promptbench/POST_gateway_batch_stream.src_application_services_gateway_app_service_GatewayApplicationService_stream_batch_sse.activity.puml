@@ -1,0 +1,16 @@
+@startuml
+title src.application.services.gateway_app_service.GatewayApplicationService.stream_batch_sse
+start
+
+:for item in items;
+:resp = await self._llm.send(dict(item.payload));
+:data = {'id': item.id, 'payload': resp};
+if (Exception as e) then (+)
+    :data = {'id': item.id, 'error': {'message': 'Orchestrator request failed', 'details': str(e)}};
+    :yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n";
+else (-)
+    :yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n";
+endif
+:yield 'data: [DONE]\n\n';
+end
+@enduml

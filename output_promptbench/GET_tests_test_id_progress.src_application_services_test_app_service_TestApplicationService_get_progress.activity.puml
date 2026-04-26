@@ -1,0 +1,13 @@
+@startuml
+title src.application.services.test_app_service.TestApplicationService.get_progress
+start
+
+if (not os.path.exists(self._test_dir(test_id))) then (+)
+    :raise FileNotFoundError('Тест не найден');
+    end
+else (-)
+    :return get_progress(test_id);
+    stop
+endif
+stop
+@enduml

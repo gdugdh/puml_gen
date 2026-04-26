@@ -1,0 +1,28 @@
+@startuml
+title POST /tests/{test_id}/requests
+start
+
+:Request;
+note: R1
+:**test_id** = Request.Path.test_id;
+note: str
+:**data** = Request.Body.data;
+note: src.interfaces.schemas.request.RequestCreate
+:**svc** = Request.Dependency.svc;
+note: src.application.services.test_app_service.TestApplicationService
+
+:Вызвать svc.create_request с параметрами test_id, data.payload и data.name.;
+:test_dir = self._require_test_dir(test_id);
+:requests_dir = os.path.join(test_dir, 'requests');
+:os.makedirs(requests_dir, exist_ok=True);
+:rid = self._next_request_id(requests_dir, name);
+:file_path = os.path.join(requests_dir, f'{rid}.json');
+:await self._storage.save_json(file_path, payload);
+:service_result = {'id': rid, 'test_id': test_id, 'file_path': file_path, 'status': 'pending'};
+:Вернуть результат вызова svc.create_request.;
+
+:Build response\nwith **RequestRead**;
+note: R2
+:HTTP 200 OK;
+stop
+@enduml
