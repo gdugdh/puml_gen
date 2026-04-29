@@ -1,11 +1,11 @@
 
 # puml_gen
 
-Прототип генератора `PlantUML`-диаграмм из промежуточного IR роутов для FastAPI веб сервисов.
+FastAPI сервис для генерации `PlantUML activity`-диаграмм из промежуточного IR роутов.
 
 ## Что делает проект
 
-- принимает JSON IR как вход
+- принимает JSON IR как HTTP request
 - собирает workflow генерации через `LangGraph`
 - генерирует `PlantUML activity`-диаграммы
 - генерирует общую диаграмму роута и отдельные `.puml`-артефакты для каждой сервисной функции
@@ -17,10 +17,12 @@
 
 ## Структура проекта
 
-* `src/main.py` — CLI entrypoint
+* `src/main.py` — FastAPI entrypoint
+* `src/endpoints.py` — HTTP endpoint для генерации
 * `src/workflow.py` — сборка и выполнение графа генерации
 * `src/generator.py` — генерация диаграмм
 * `src/llm.py` — работа с LLM
+* `src/prompts.py` — fallback prompts и role-based prompt rendering
 * `output/` — сгенерированные диаграммы
 * `diagrams/puml/` — примеры и готовые `.puml`
 * `synthetic_data/` — тестовый IR
@@ -34,26 +36,24 @@
 make install
 ```
 
-Базовый запуск:
+Запуск сервера:
 
 ```bash
-make generate
+python -m src.main
 ```
 
-Явный запуск:
+POST endpoint:
 
 ```bash
-python -m src.main \
-  --input input/synthetic_data.json \
-  --outdir output
+POST /generate
 ```
 
 ## Конфиг LLM
 
-Проект поддерживает два режима:
+Проект поддерживает два режима на каждый request:
 
-- `LLM=OPENROUTER`
-- `LLM=LOCAL`
+- `model=openai/gpt-4o-mini`
+- `model=local`
 
 Пример `.env` для OpenRouter:
 
@@ -85,7 +85,7 @@ yc compute ssh --id epdtg3bfi4p4fg7mkutg -- \
   -o ServerAliveInterval=30
 ```
 
-После этого генератор продолжит работать обычной командой `python -m src.main ...`.
+После этого FastAPI сервис продолжит использовать локальную модель через настроенный endpoint.
 
 ### Запуск через Docker (не пробовал)
 
@@ -101,11 +101,13 @@ docker compose run --rm puml-gen \
 
 Сейчас проект работает с synthetic / intermediate IR в JSON-формате.
 Основной сценарий — генерация activity-диаграмм по роутам и сервисным функциям.
+В request передаются `input_path`, `model`, `messages`, `stream`, `options`.
+`input_path` должен указывать на локальный synthetic `.json` файл.
 В `routes` route-handler задаётся отдельно, а сервисные функции передаются как nested list в `service_function_groups`, даже если сейчас внутри только один `function_id`.
 
 ## Выходные данные
 
-На выходе проект создаёт общий файл роута `{route_slug}.activity.puml` и service-файлы `{route_slug}.{function_id_slug}.activity.puml`, которые можно дальше рендерить в изображения или использовать как артефакты документации.
+На выходе проект возвращает `routes` и `artifacts` в HTTP response, а также пишет общий файл роута `{route_slug}.activity.puml` и service-файлы `{route_slug}.{function_id_slug}.activity.puml` в `output/`.
 
 ## Технологии
 
