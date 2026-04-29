@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src.logging_utils import log_event
 
@@ -14,11 +16,23 @@ class LLMConfig:
     api_key: str
     model: str
     base_url: str
+    provider: str = "OPENROUTER"
+    chat_path: str = "/chat/completions"
+    timeout_seconds: float = 60.0
 
 
 def load_config() -> LLMConfig:
     _load_dotenv(Path(".env"))
 
+    provider = os.getenv("LLM", "OPENROUTER").strip().upper() or "OPENROUTER"
+    if provider == "OPENROUTER":
+        return _load_openrouter_config()
+    if provider == "LOCAL":
+        return _load_local_config()
+    raise RuntimeError("LLM must be set to OPENROUTER or LOCAL")
+
+
+def _load_openrouter_config() -> LLMConfig:
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
@@ -27,6 +41,24 @@ def load_config() -> LLMConfig:
         api_key=api_key,
         model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
         base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        provider="OPENROUTER",
+        chat_path=os.getenv("OPENROUTER_CHAT_PATH", "/chat/completions"),
+        timeout_seconds=_load_timeout("OPENROUTER_TIMEOUT_SECONDS", default=60.0),
+    )
+
+
+def _load_local_config() -> LLMConfig:
+    model = os.getenv("LOCAL_LLM_MODEL", "").strip()
+    if not model:
+        raise RuntimeError("LOCAL_LLM_MODEL is not set")
+
+    return LLMConfig(
+        api_key=os.getenv("LOCAL_LLM_API_KEY", "").strip(),
+        model=model,
+        base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8080"),
+        provider="LOCAL",
+        chat_path=os.getenv("LOCAL_LLM_CHAT_PATH", "/api/chat"),
+        timeout_seconds=_load_timeout("LOCAL_LLM_TIMEOUT_SECONDS", default=120.0),
     )
 
 
@@ -37,46 +69,130 @@ def chat_json(
     user_prompt: str,
     node_name: str = "llm",
 ) -> dict[str, object]:
-    payload = {
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.2,
-    }
-    request = urllib.request.Request(
-        url=f"{config.base_url.rstrip('/')}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://local.synthetic-generator",
-            "X-Title": "synthetic_generator_with_ML",
-        },
-        method="POST",
-    )
+    payload = _build_payload(config, system_prompt=system_prompt, user_prompt=user_prompt)
+    request = _build_request(config, payload)
     log_event(
         f"{node_name} llm request",
         {
+            "provider": config.provider,
+            "base_url": config.base_url,
+            "chat_path": config.chat_path,
             "payload": payload,
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
             body = json.loads(response.read().decode("utf-8"))
-        content = body["choices"][0]["message"]["content"]
+        content = _extract_response_content(config, body)
         parsed = json.loads(content)
         log_event(
             f"{node_name} llm response",
             {
+                "provider": config.provider,
                 "parsed_content": parsed,
             },
         )
         return parsed
-    except Exception:
+    except urllib.error.HTTPError as error:
+        response_body = error.read().decode("utf-8", errors="replace")
+        log_event(
+            f"{node_name} llm error",
+            {
+                "provider": config.provider,
+                "status": getattr(error, "code", None),
+                "reason": str(error),
+                "response_body": response_body,
+            },
+        )
+        raise RuntimeError(f"{config.provider} request failed with HTTP {getattr(error, 'code', 'unknown')}") from error
+    except json.JSONDecodeError as error:
+        log_event(
+            f"{node_name} llm error",
+            {
+                "provider": config.provider,
+                "reason": "invalid_json_response",
+                "error": str(error),
+            },
+        )
+        raise RuntimeError(f"{config.provider} returned invalid JSON content") from error
+    except Exception as error:
+        log_event(
+            f"{node_name} llm error",
+            {
+                "provider": config.provider,
+                "reason": type(error).__name__,
+                "error": str(error),
+            },
+        )
         raise
+
+
+def _build_payload(
+    config: LLMConfig,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+) -> dict[str, Any]:
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    if config.provider == "OPENROUTER":
+        return {
+            "model": config.model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+        }
+    if config.provider == "LOCAL":
+        return {
+            "model": config.model,
+            "messages": messages,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0.2},
+        }
+    raise RuntimeError(f"Unsupported LLM provider: {config.provider}")
+
+
+def _build_request(config: LLMConfig, payload: dict[str, Any]) -> urllib.request.Request:
+    headers = {"Content-Type": "application/json"}
+    if config.provider == "OPENROUTER":
+        headers.update(
+            {
+                "Authorization": f"Bearer {config.api_key}",
+                "HTTP-Referer": "https://local.synthetic-generator",
+                "X-Title": "synthetic_generator_with_ML",
+            }
+        )
+    elif config.provider == "LOCAL" and config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+
+    return urllib.request.Request(
+        url=f"{config.base_url.rstrip('/')}{config.chat_path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
+
+def _extract_response_content(config: LLMConfig, body: dict[str, Any]) -> str:
+    if config.provider == "OPENROUTER":
+        return str(body["choices"][0]["message"]["content"])
+    if config.provider == "LOCAL":
+        return str(body["message"]["content"])
+    raise RuntimeError(f"Unsupported LLM provider: {config.provider}")
+
+
+def _load_timeout(env_name: str, *, default: float) -> float:
+    raw_value = os.getenv(env_name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return float(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"{env_name} must be a number") from error
 
 
 def _load_dotenv(env_path: Path) -> None:

@@ -48,15 +48,48 @@ python -m src.main \
   --outdir output
 ```
 
-### Запуск через Docker (не пробовал)
-добавить .env c:
-```
+## Конфиг LLM
+
+Проект поддерживает два режима:
+
+- `LLM=OPENROUTER`
+- `LLM=LOCAL`
+
+Пример `.env` для OpenRouter:
+
+```bash
+LLM=OPENROUTER
 OPENROUTER_API_KEY=your_key_here
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
 
-команды для запуска:
+Пример `.env` для локальной модели через Ollama-compatible endpoint:
+
+```bash
+LLM=LOCAL
+LOCAL_LLM_MODEL=your-local-model
+LOCAL_LLM_BASE_URL=http://127.0.0.1:8080
+LOCAL_LLM_CHAT_PATH=/api/chat
+LOCAL_LLM_TIMEOUT_SECONDS=120
+```
+
+Если модель доступна только на удалённой машине, можно поднять туннель:
+
+```bash
+yc compute ssh --id epdtg3bfi4p4fg7mkutg -- \
+  -vvv \
+  -N \
+  -L 8080:localhost:11434 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30
+```
+
+После этого генератор продолжит работать обычной командой `python -m src.main ...`.
+
+### Запуск через Docker (не пробовал)
+
+Команды для запуска:
 ```
 docker compose up --build
 docker compose run --rm puml-gen \
