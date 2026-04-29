@@ -3,17 +3,15 @@ from __future__ import annotations
 import json
 
 from src.llm import LLMConfig
+from src.llm import build_llm_config
 from src.llm import chat_json
-from src.llm import load_config
 
 
-def test_load_config_uses_openrouter_by_default(monkeypatch):
-    monkeypatch.delenv("LLM", raising=False)
+def test_build_llm_config_uses_openrouter_for_gpt4o_mini(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "secret")
-    monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
-    config = load_config()
+    config = build_llm_config("openai/gpt-4o-mini")
 
     assert config.provider == "OPENROUTER"
     assert config.model == "openai/gpt-4o-mini"
@@ -21,12 +19,11 @@ def test_load_config_uses_openrouter_by_default(monkeypatch):
     assert config.chat_path == "/chat/completions"
 
 
-def test_load_config_uses_local_provider(monkeypatch):
-    monkeypatch.setenv("LLM", "LOCAL")
+def test_build_llm_config_uses_local_provider(monkeypatch):
     monkeypatch.setenv("LOCAL_LLM_MODEL", "llama3.1:8b")
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8080")
 
-    config = load_config()
+    config = build_llm_config("local")
 
     assert config.provider == "LOCAL"
     assert config.model == "llama3.1:8b"
@@ -34,7 +31,7 @@ def test_load_config_uses_local_provider(monkeypatch):
     assert config.chat_path == "/api/chat"
 
 
-def test_chat_json_uses_local_ollama_payload(monkeypatch):
+def test_chat_json_uses_local_payload_with_request_options(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -69,6 +66,8 @@ def test_chat_json_uses_local_ollama_payload(monkeypatch):
         provider="LOCAL",
         chat_path="/api/chat",
         timeout_seconds=90.0,
+        stream=True,
+        options={"temperature": 0.1, "top_k": 10},
     )
 
     result = chat_json(
@@ -90,5 +89,5 @@ def test_chat_json_uses_local_ollama_payload(monkeypatch):
         ],
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0.2},
+        "options": {"temperature": 0.1, "top_k": 10},
     }

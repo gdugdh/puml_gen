@@ -4,21 +4,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.llm import load_config
+from src.api_models import DiagramDocument, GeneratePumlRequest, GeneratePumlResponse
+from src.llm import build_llm_config
+from src.prompts import build_prompt_overrides
 from src.workflow import build_workflow
 
 
-def gen_png_graph(app_obj: Any, name_photo: str = "graph.png") -> None:
-    """
-    Генерирует PNG-изображение графа и сохраняет в файл.
+DEFAULT_OUTPUT_DIR = Path("output")
 
-    Args:
-        app_obj: Скомпилированный объект графа
-        name_photo: Имя файла для сохранения (по умолчанию "graph.png")
-    """
+
+def gen_png_graph(app_obj: Any, name_photo: str = "graph.png") -> None:
     try:
-        with open(name_photo, "wb") as f:
-            f.write(app_obj.get_graph().draw_mermaid_png())
+        with open(name_photo, "wb") as file_obj:
+            file_obj.write(app_obj.get_graph().draw_mermaid_png())
     except Exception:
         pass
 
@@ -26,18 +24,53 @@ def gen_png_graph(app_obj: Any, name_photo: str = "graph.png") -> None:
 def generate_from_file(
     input_path: str | Path,
     output_dir: str | Path,
+    *,
+    model: str = "openai/gpt-4o-mini",
 ) -> list[Path]:
-    data = json.loads(Path(input_path).read_text(encoding="utf-8"))
+    request = GeneratePumlRequest(
+        model=model,
+        input_path=str(input_path),
+    )
+    response = generate_from_request(request, output_dir=output_dir)
+    generated_files: list[Path] = []
+    for document in [*response.routes, *response.artifacts]:
+        name = document.name if hasattr(document, "name") else document["name"]
+        generated_files.append(Path(output_dir) / name)
+    return generated_files
+
+
+def generate_from_request(
+    request: GeneratePumlRequest,
+    *,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+) -> GeneratePumlResponse:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    input_path = Path(request.input_path)
+    if input_path.suffix.lower() != ".json":
+        raise ValueError("input_path must point to a .json file")
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+    data = json.loads(input_path.read_text(encoding="utf-8"))
 
-    llm_config = load_config()
-    functions_by_id = {function["function_id"]: function for function in data.get("functions", [])}
+    llm_config = build_llm_config(
+        request.model,
+        options=_model_dump(request.options, exclude_none=True),
+        stream=request.stream,
+    )
+    prompt_overrides = build_prompt_overrides(
+        [_model_dump(message) for message in request.messages]
+    )
+    functions_by_id = {
+        function["function_id"]: function
+        for function in data.get("functions", [])
+    }
     workflow = build_workflow()
 
     gen_png_graph(workflow, "docs/graph.png")
 
-    generated_files: list[Path] = []
+    response_routes: list[dict[str, str]] = []
+    response_artifacts: list[dict[str, str]] = []
     for route in data.get("routes", []):
         route_function = functions_by_id[route["handler_function_id"]]
         service_functions = _resolve_service_functions(route, functions_by_id)
@@ -46,28 +79,34 @@ def generate_from_file(
             "route_function": route_function,
             "service_functions": service_functions,
             "llm_config": llm_config,
+            "prompt_overrides": prompt_overrides,
             "max_retries": 3,
         }
         result = workflow.invoke(state)
-        route_slug = _route_slug(str(route["route_id"]))
-        out_path = output_dir / f"{route_slug}.activity.puml"
-        out_path.write_text(result["current_puml"], encoding="utf-8")
-        generated_files.append(out_path)
-        for service_artifact in result.get("service_artifacts", []):
-            function_id = str(service_artifact.get("function_id", "unknown"))
-            service_path = output_dir / f"{route_slug}.{_slug(function_id)}.activity.puml"
-            service_path.write_text(str(service_artifact["current_puml"]), encoding="utf-8")
-            generated_files.append(service_path)
-    return generated_files
+        response_routes.extend(result.get("response_routes", []))
+        response_artifacts.extend(result.get("response_artifacts", []))
+
+    _write_documents(output_dir, response_routes)
+    _write_documents(output_dir, response_artifacts)
+    return GeneratePumlResponse(
+        routes=[DiagramDocument(**document) for document in response_routes],
+        artifacts=[DiagramDocument(**document) for document in response_artifacts],
+    )
 
 
-def _route_slug(route_id: str) -> str:
-    return _slug(route_id)
+def _write_documents(output_dir: Path, documents: list[dict[str, str]]) -> None:
+    for document in documents:
+        (output_dir / document["name"]).write_text(document["puml"], encoding="utf-8")
 
 
-def _slug(value: str) -> str:
-    chars = [char if char.isalnum() or char in {"_", "-"} else "_" for char in value]
-    return "_".join(part for part in "".join(chars).split("_") if part) or "unknown"
+def _model_dump(value: Any, *, exclude_none: bool = False) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(exclude_none=exclude_none)
+    if isinstance(value, dict):
+        if exclude_none:
+            return {key: nested for key, nested in value.items() if nested is not None}
+        return dict(value)
+    raise TypeError(f"Unsupported model value: {type(value).__name__}")
 
 
 def _resolve_service_functions(

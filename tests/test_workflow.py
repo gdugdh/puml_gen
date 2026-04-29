@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from src.api_models import GeneratePumlRequest
+from src.generator import generate_from_request
 from src.generator import generate_from_file
 from src.llm import LLMConfig
 from src.workflow import _deterministic_validate
@@ -15,6 +17,7 @@ from src.workflow import _service_prompt_context
 from src.workflow import _strip_technical_try_except_steps
 from src.workflow import _validator_prompt_context
 from src.workflow import compress_blocks_node
+from src.workflow import generate_route_blocks_node
 from src.workflow import generate_service_blocks_node
 from src.workflow import route_after_validation
 from src.workflow import validate_puml_node
@@ -90,7 +93,7 @@ def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeyp
             return {"is_valid": True, "feedback": ""}
         raise AssertionError(f"unexpected node {node_name}")
 
-    monkeypatch.setattr("src.generator.load_config", lambda: LLMConfig("test", "test", "https://example.test"))
+    monkeypatch.setattr("src.generator.build_llm_config", lambda *args, **kwargs: LLMConfig("test", "test", "https://example.test"))
     monkeypatch.setattr("src.generator.gen_png_graph", lambda app_obj, name_photo="graph.png": None)
     monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
 
@@ -112,6 +115,38 @@ def test_generate_from_file_writes_route_and_service_artifacts(tmp_path, monkeyp
     assert ":Persist user;" in service_puml
     assert ":Return;" not in service_puml
     assert service_puml.endswith("stop\n@enduml\n")
+
+
+def test_generate_from_request_reads_ir_from_input_path(tmp_path, monkeypatch):
+    input_path = tmp_path / "input.json"
+    output_dir = tmp_path / "output"
+    input_path.write_text(json.dumps(_small_ir()), encoding="utf-8")
+
+    def fake_chat_json(config, *, system_prompt, user_prompt, node_name):
+        if node_name == "generate_route_blocks":
+            return {"blocks": [{"kind": "action", "text": "Call register_user"}]}
+        if node_name.startswith("generate_service_blocks:"):
+            return {"blocks": [{"kind": "action", "text": "user = User from payload"}]}
+        if node_name == "compress":
+            return {"blocks": [{"kind": "action", "text": "Persist user"}]}
+        raise AssertionError(f"unexpected node {node_name}")
+
+    monkeypatch.setattr("src.generator.build_llm_config", lambda *args, **kwargs: LLMConfig("test", "test", "https://example.test"))
+    monkeypatch.setattr("src.generator.gen_png_graph", lambda app_obj, name_photo="graph.png": None)
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    response = generate_from_request(
+        GeneratePumlRequest(
+            model="openai/gpt-4o-mini",
+            input_path=str(input_path),
+        ),
+        output_dir=output_dir,
+    )
+
+    assert [document.name for document in response.routes] == ["POST_auth.activity.puml"]
+    assert [document.name for document in response.artifacts] == [
+        "POST_auth.src_auth_service_register_user.activity.puml",
+    ]
 
 
 def test_control_flow_noise_does_not_break_puml_validation():
@@ -483,6 +518,39 @@ def test_generate_service_blocks_prompt_uses_feedback_as_instruction(monkeypatch
     assert '"signature": "def register_user(db, payload)"' in captured_prompt["text"]
     assert '"module"' not in captured_prompt["text"]
     assert '"file"' not in captured_prompt["text"]
+
+
+def test_generate_route_blocks_uses_role_based_prompt_overrides(monkeypatch):
+    captured = {}
+
+    def fake_chat_json(*args, **kwargs):
+        captured["system"] = kwargs["system_prompt"]
+        captured["user"] = kwargs["user_prompt"]
+        return {"blocks": [{"kind": "action", "text": "service.call()"}]}
+
+    monkeypatch.setattr("src.workflow.chat_json", fake_chat_json)
+
+    state = {
+        "route": {"route_id": "POST /auth"},
+        "route_function": {
+            "function_id": "src.auth.controller.register_user",
+            "signature": "async def register_user(payload)",
+            "code": "async def register_user(payload):\n    return service.register_user(payload)",
+            "parameters": [],
+            "http": {"method": "POST", "path": "/auth", "status_code": 201},
+        },
+        "prompt_overrides": {
+            "route-system": "custom system",
+            "route-user": "Endpoint={endpoint}\nCode={code}\nPrev={puml_gen}",
+        },
+        "llm_config": LLMConfig(api_key="test", model="test", base_url="https://example.test"),
+    }
+
+    generate_route_blocks_node(state)
+
+    assert captured["system"] == "custom system"
+    assert "Endpoint=POST /auth" in captured["user"]
+    assert "Code=async def register_user(payload):" in captured["user"]
 
 
 def test_compress_blocks_prompt_uses_feedback_only_when_present(monkeypatch):

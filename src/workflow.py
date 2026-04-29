@@ -4,168 +4,11 @@ import difflib
 import json
 from typing import Literal, TypedDict
 
-from langchain_core.prompts import PromptTemplate
-from langgraph.graph import END, START, StateGraph
-
 from src.llm import LLMConfig, chat_json
+from src.prompts import DEFAULT_PROMPTS, render_prompt
 
 
 DiagramKind = Literal["route", "service", "merge"]
-
-
-FUNCTION_BLOCK_PROMPT = PromptTemplate.from_template(
-    """
-Ты превращаешь компактный IR одной route-функции в строгий JSON-блок.
-
-Формат ответа:
-{{
-  "blocks": [
-    {{"kind":"action","text":"..."}},
-    {{"kind":"if","condition":"...","then":[{{"kind":"action","text":"..."}}],"else":[{{"kind":"action","text":"..."}}]}},
-    {{"kind":"partition","title":"...","blocks":[{{"kind":"action","text":"..."}}]}}
-  ]
-}}
-
-Жесткие правила:
-1. Только JSON, без markdown.
-2. kind только: action, if, partition.
-3. Старайся описывать каждый блок кодом, если никак не получится передать смысл кода, то текстом описывай.
-4. Пиши текст на русском.
-5. Если блок заканчивается raise, добавь сразу после него {{"kind":"action","text":"end"}}.
-6. Если блок заканчивается return, добавь сразу после него {{"kind":"action","text":"stop"}}.
-7. end и stop пиши только как action.text ровно "end" или "stop".
-8. Если есть feedback, исправь именно описанную проблему и верни полный JSON заново, а не частичный diff.
-
-# Инструкция
-{instruction}
-
-# Контекст
-<route_context>
-{route_context_json}
-</route_context>
-
-{feedback_section}
-""".strip()
-)
-
-FUNCTION_SERVICE_BLOCK_PROMPT = PromptTemplate.from_template(
-    """
-Ты превращаешь компактный IR одной service-функции в строгую последовательность блоков в JSON.
-
-Формат ответа:
-{{
-  "blocks": [
-    {{"kind":"action","text":"..."}},
-    {{"kind":"if","condition":"...","then":[{{"kind":"action","text":"..."}}],"else":[{{"kind":"action","text":"..."}}]}},
-    {{"kind":"partition","title":"...","blocks":[{{"kind":"action","text":"..."}}]}}
-  ]
-}}
-
-Жесткие правила:
-1. Только JSON, без markdown.
-2. kind только: action, if, partition.
-3. Старайся описывать каждый блок кодом, если никак не получится передать смысл кода, то текстом описывай.
-4. Пиши текст на русском.
-5. Если блок заканчивается raise, добавь сразу после него {{"kind":"action","text":"end"}}.
-6. Если блок заканчивается return, добавь сразу после него {{"kind":"action","text":"stop"}}.
-7. end и stop пиши только как action.text ровно "end" или "stop".
-8. Старайся писать больше кода и минимум слов, вот примеры хороших результатов:
-gameIds = множество ключей set<key> из donateHubGames по полю id
-wataComissionRub = price / wataRateRubToUsdt * (terminalComissionInPercent / 100)
-get_password_hash(user.password)
-9. Если есть feedback, исправь именно описанную проблему и верни полный JSON заново, а не частичный diff.
-
-# Инструкция
-{instruction}
-
-# Контекст
-<service_function_context>
-{function_context_json}
-</service_function_context>
-
-{feedback_section}
-""".strip()
-)
-
-COMPRESS_BLOCK_PROMPT = PromptTemplate.from_template(
-    """
-Ты сжимаешь JSON-блок activity-диаграммы.
-Ответ только JSON в том же формате:
-{{"blocks":[...]}}
-
-# Инструкция
-{instruction}
-
-Правила компрессии:
-{compression_rules}
-
-Жесткие правила:
-1. Только JSON.
-2. Не меняй смысл веток if.
-3. Не удаляй важные error branches, DB read/write, entity/model construction, внешние вызовы.
-4. Удаляй или схлопывай мелкие технические шаги без бизнес-смысла.
-5. Не добавляй новые блоки, которых не было в исходном JSON.
-6. Не удаляй и не перемещай action с text "end" или "stop".
-7. Если в feedback указано, что потерян service return, route response, success completion, error branch, service-call или terminal block, сохрани эти элементы в выходном JSON и не схлопывай их.
-8. Если feedback требует явно показать завершение успешного потока, не удаляй return/stop и не заменяй их на более краткую формулировку.
-
-{feedback_section}
-
-current_block_json:
-{current_block_json}
-""".strip()
-)
-
-VALIDATOR_PROMPT = PromptTemplate.from_template(
-    """
-Ты валидируешь уже собранную PlantUML activity-диаграмму и возвращаешь точный диагноз.
-
-Ответ только JSON:
-{{"is_valid": true, "critical_feedback": "", "warning_feedback": "", "suggested_fix": ""}}
-
-Требования к ответу:
-1. Если deterministic_error не "none", верни is_valid=false, critical_feedback с этой ошибкой, warning_feedback="".
-2. Если deterministic_error == "none", оценивай только текущую диаграмму и только по переданному context.
-3. Общая диаграмма merge ожидаемо содержит route-shell (Request/HTTP/Build response) и service actions вместе. Это не ошибка.
-4. end в error-ветке и stop в успешном конце являются ожидаемыми PlantUML terminal blocks.
-5. Не проверяй область видимости переменных: диаграмма не исполняемый код, поэтому {{e}} в тексте logging.error допустим.
-6. Будь максимально мягким и непредирчивым. Если сомневаешься, верни is_valid=true.
-7. Нельзя отклонять диаграмму из-за недостаточной детализации, краткости формулировок, стиля или отсутствия "narrative bridge" между service result и route response, если общий поток уже понятен.
-8. Нельзя требовать одновременно и service return, и route response, если диаграмма уже показывает завершение успешного потока другим корректным способом.
-9. Определения:
-   - service-call шаг засчитывается, если вызов service-функции явно показан либо отдельным action, либо прямо в condition ветки if.
-   - error handling засчитывается, если есть явная error-ветка или error terminal: action с обработкой ошибки, raise, end, return error response или иная явная error branch.
-   - route response засчитывается, если успешный поток явно завершается через Build response, HTTP status, FastAPI response, return response или другой явный success terminal.
-10. Для diagram_kind=route проверяй только route-level смысл. Не требуй service-internal error branch, если она не дана явно в route context.
-11. Для diagram_kind=service проверяй только service-level смысл. Не требуй route-shell.
-12. Для diagram_kind=merge допускается смесь route-shell и service actions. Это нормальный формат.
-13. Нельзя выводить новые обязательные ветки из общих знаний о backend. Проверяй только то, что прямо следует из context и diagram.
-14. Верни is_valid=false только в одном из следующих доказуемых случаев:
-   - в context есть вызов service-функции, а в diagram нет никакого service-call шага по определению выше;
-   - в service context явно есть error branch, а в diagram осталась только success branch и error handling действительно потерян по определению выше;
-   - в context явно есть return токена или другого результата, а в diagram нет ни service return, ни route response, ни другого явного завершения успешного потока по определению выше.
-15. Если ни один из этих случаев не доказан по diagram и context, верни is_valid=true.
-16. critical_feedback всегда строка, не список. Заполняй только если is_valid=false. Кратко опиши только критичную проблему и укажи фрагмент diagram/context, на который опираешься.
-17. warning_feedback всегда строка, не список. Сюда можно положить мягкие, спорные или стилистические замечания, которые не должны ломать пайплайн. warning_feedback не должен влиять на is_valid.
-18. suggested_fix всегда строка, не список. Если is_valid=false, дай короткую инструкцию, что нужно исправить при следующей генерации. Если is_valid=true, верни пустую строку.
-19. Не копируй эти правила в critical_feedback, warning_feedback или suggested_fix.
-
-Не придирайся к не точностям и стилю.
-
-# Диаграмма
-diagram_kind: {diagram_kind}
-
-<diagram>
-{current_puml}
-</diagram>
-
-<context>
-{diagram_context_json}
-</context>
-
-deterministic_error: {deterministic_error}
-""".strip()
-)
 
 
 class DiagramArtifact(TypedDict):
@@ -183,6 +26,7 @@ class DiagramState(TypedDict, total=False):
     route_function: dict[str, object]
     service_functions: list[dict[str, object]]
     llm_config: LLMConfig
+    prompt_overrides: dict[str, str]
     current_diagram_kind: DiagramKind
     current_service_function: dict[str, object] | None
     current_function_id: str
@@ -202,9 +46,13 @@ class DiagramState(TypedDict, total=False):
     retry_count: int
     max_retries: int
     validator_passed: bool
+    response_routes: list[dict[str, str]]
+    response_artifacts: list[dict[str, str]]
 
 
 def build_workflow():
+    from langgraph.graph import END, START, StateGraph
+
     graph = StateGraph(DiagramState)
     graph.add_node("init_workflow", init_workflow_node)
     graph.add_node("generate_route_blocks", generate_route_blocks_node)
@@ -259,6 +107,7 @@ def init_workflow_node(state: DiagramState) -> DiagramState:
         "current_diagram_kind": "route",
         "current_service_function": None,
         "current_function_id": str(state["route_function"].get("function_id", "route")),
+        "prompt_overrides": state.get("prompt_overrides", {}),
         "current_blocks": [],
         "route_blocks": [],
         "raw_blocks": [],
@@ -273,23 +122,20 @@ def init_workflow_node(state: DiagramState) -> DiagramState:
         "retry_count": 0,
         "validation_feedback": "",
         "validator_passed": False,
+        "response_routes": [],
+        "response_artifacts": [],
     }
 
 
 def generate_route_blocks_node(state: DiagramState) -> DiagramState:
     feedback = state.get("validation_feedback", "")
-    prompt = FUNCTION_BLOCK_PROMPT.format(
-        instruction=_route_generation_instruction(feedback),
-        route_context_json=json.dumps(
-            _route_prompt_context(state["route"], state["route_function"]),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        feedback_section=_feedback_section(feedback),
+    prompt = render_prompt(
+        _prompt_template(state, "route-user"),
+        **_route_prompt_render_context(state, feedback),
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты генерируешь только JSON-блоки для route-функции.",
+        system_prompt=_prompt_template(state, "route-system"),
         user_prompt=prompt,
         node_name="generate_route_blocks",
     )
@@ -347,18 +193,13 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
 
     function_id = str(service_function.get("function_id", "unknown"))
     feedback = state.get("validation_feedback", "")
-    prompt = FUNCTION_SERVICE_BLOCK_PROMPT.format(
-        instruction=_service_generation_instruction(feedback),
-        function_context_json=json.dumps(
-            _service_prompt_context(service_function),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        feedback_section=_feedback_section(feedback),
+    prompt = render_prompt(
+        _prompt_template(state, "service-user"),
+        **_service_prompt_render_context(state, service_function, feedback),
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты генерируешь только JSON-блоки для функции.",
+        system_prompt=_prompt_template(state, "service-system"),
         user_prompt=prompt,
         node_name=f"generate_service_blocks:{function_id}",
     )
@@ -382,15 +223,13 @@ def generate_service_blocks_node(state: DiagramState) -> DiagramState:
 def compress_blocks_node(state: DiagramState) -> DiagramState:
     input_blocks = state.get("current_blocks", [])
     feedback = state.get("validation_feedback", "")
-    prompt = COMPRESS_BLOCK_PROMPT.format(
-        instruction=_compression_instruction(feedback),
-        compression_rules=_compression_rules(),
-        feedback_section=_feedback_section(feedback),
-        current_block_json=json.dumps(input_blocks, ensure_ascii=False, indent=2),
+    prompt = render_prompt(
+        _prompt_template(state, "compress-user"),
+        **_compress_prompt_render_context(input_blocks, feedback),
     )
     result = chat_json(
         state["llm_config"],
-        system_prompt="Ты сжимаешь JSON-блоки и отвечаешь только JSON.",
+        system_prompt=_prompt_template(state, "compress-system"),
         user_prompt=prompt,
         node_name="compress",
     )
@@ -501,10 +340,25 @@ def finalize_node(state: DiagramState) -> DiagramState:
         if service_error:
             function_id = service_artifact.get("function_id", "unknown")
             raise RuntimeError(f"Service diagram {function_id} is invalid: {service_error}")
+    response_routes = [
+        {
+            "name": _route_filename(state["route"]),
+            "puml": state["current_puml"],
+        }
+    ]
+    response_artifacts = [
+        {
+            "name": _service_filename(state["route"], service_artifact["function_id"]),
+            "puml": service_artifact["current_puml"],
+        }
+        for service_artifact in state.get("service_artifacts", [])
+    ]
     return {
         "current_puml": state["current_puml"],
         "route_artifact": state.get("route_artifact"),
         "service_artifacts": state.get("service_artifacts", []),
+        "response_routes": response_routes,
+        "response_artifacts": response_artifacts,
     }
 
 
@@ -1264,6 +1118,117 @@ def _feedback_section(feedback: str) -> str:
     if not normalized:
         return ""
     return "<feedback>\n" + normalized + "\n</feedback>"
+
+
+def _prompt_template(state: DiagramState, role: str) -> str:
+    overrides = state.get("prompt_overrides", {})
+    return overrides.get(role, DEFAULT_PROMPTS[role])
+
+
+def _route_prompt_render_context(state: DiagramState, feedback: str) -> dict[str, object]:
+    route_context = _route_prompt_context(state["route"], state["route_function"])
+    return {
+        "instruction": _route_generation_instruction(feedback),
+        "route_context_json": json.dumps(route_context, ensure_ascii=False, indent=2),
+        "feedback_section": _feedback_section(feedback),
+        "endpoint": _route_endpoint_label(state["route"], state["route_function"]),
+        "code": _extract_function_code(state["route_function"]),
+        "puml_gen": _joined_puml_context(state),
+    }
+
+
+def _service_prompt_render_context(
+    state: DiagramState,
+    service_function: dict[str, object],
+    feedback: str,
+) -> dict[str, object]:
+    function_context = _service_prompt_context(service_function)
+    return {
+        "instruction": _service_generation_instruction(feedback),
+        "function_context_json": json.dumps(function_context, ensure_ascii=False, indent=2),
+        "feedback_section": _feedback_section(feedback),
+        "endpoint": _route_endpoint_label(state["route"], state["route_function"]),
+        "code": _extract_function_code(service_function),
+        "puml_gen": _joined_puml_context(state),
+        "function_id": service_function.get("function_id", "unknown"),
+    }
+
+
+def _compress_prompt_render_context(
+    input_blocks: list[dict[str, object]],
+    feedback: str,
+) -> dict[str, object]:
+    return {
+        "instruction": _compression_instruction(feedback),
+        "compression_rules": _compression_rules(),
+        "feedback_section": _feedback_section(feedback),
+        "current_block_json": json.dumps(input_blocks, ensure_ascii=False, indent=2),
+    }
+
+
+def _joined_puml_context(state: DiagramState) -> str:
+    fragments: list[str] = []
+    current_puml = state.get("current_puml", "").strip()
+    if current_puml:
+        fragments.append(current_puml)
+    route_artifact = state.get("route_artifact")
+    if isinstance(route_artifact, dict):
+        route_puml = str(route_artifact.get("current_puml", "")).strip()
+        if route_puml and route_puml not in fragments:
+            fragments.append(route_puml)
+    for service_artifact in state.get("service_artifacts", []):
+        service_puml = str(service_artifact.get("current_puml", "")).strip()
+        if service_puml and service_puml not in fragments:
+            fragments.append(service_puml)
+    return "\n\n".join(fragments)
+
+
+def _extract_function_code(function: dict[str, object]) -> str:
+    for key in ("code", "source", "body", "raw_code"):
+        value = function.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    signature = function.get("signature")
+    if isinstance(signature, str) and signature.strip():
+        step_lines = []
+        for step in _prompt_steps(function):
+            source = step.get("source")
+            if isinstance(source, str) and source.strip():
+                step_lines.append(source)
+        if step_lines:
+            return signature + "\n" + "\n".join(step_lines)
+        return signature
+    return ""
+
+
+def _route_endpoint_label(
+    route: dict[str, object],
+    route_function: dict[str, object],
+) -> str:
+    endpoint = route.get("endpoint") or route.get("route_id")
+    if isinstance(endpoint, str) and endpoint.strip():
+        return endpoint
+    http_meta = route_function.get("http", {})
+    if isinstance(http_meta, dict):
+        method = str(http_meta.get("method", "")).strip()
+        path = str(http_meta.get("path", "")).strip()
+        return " ".join(part for part in (method, path) if part)
+    return ""
+
+
+def _route_filename(route: dict[str, object]) -> str:
+    route_id = str(route.get("route_id", "route"))
+    return f"{_slug(route_id)}.activity.puml"
+
+
+def _service_filename(route: dict[str, object], function_id: str) -> str:
+    route_id = str(route.get("route_id", "route"))
+    return f"{_slug(route_id)}.{_slug(function_id)}.activity.puml"
+
+
+def _slug(value: str) -> str:
+    chars = [char if char.isalnum() or char in {"_", "-"} else "_" for char in value]
+    return "_".join(part for part in "".join(chars).split("_") if part) or "unknown"
 
 
 def _route_prompt_context(

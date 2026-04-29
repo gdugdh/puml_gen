@@ -4,62 +4,69 @@ import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from src.logging_utils import log_event
 
 
+LLMProvider = Literal["OPENROUTER", "LOCAL"]
+
+    
 @dataclass(frozen=True, slots=True)
 class LLMConfig:
     api_key: str
     model: str
     base_url: str
-    provider: str = "OPENROUTER"
+    provider: LLMProvider = "OPENROUTER"
     chat_path: str = "/chat/completions"
     timeout_seconds: float = 60.0
+    stream: bool = False
+    options: dict[str, Any] = field(default_factory=dict)
 
 
-def load_config() -> LLMConfig:
+def build_llm_config(
+    requested_model: str,
+    *,
+    options: dict[str, Any] | None = None,
+    stream: bool = False,
+) -> LLMConfig:
     _load_dotenv(Path(".env"))
 
-    provider = os.getenv("LLM", "OPENROUTER").strip().upper() or "OPENROUTER"
-    if provider == "OPENROUTER":
-        return _load_openrouter_config()
-    if provider == "LOCAL":
-        return _load_local_config()
-    raise RuntimeError("LLM must be set to OPENROUTER or LOCAL")
+    normalized_model = requested_model.strip()
+    normalized_options = _normalize_options(options)
+    if normalized_model == "openai/gpt-4o-mini":
+        api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is not set")
+        return LLMConfig(
+            api_key=api_key,
+            model=normalized_model,
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            provider="OPENROUTER",
+            chat_path=os.getenv("OPENROUTER_CHAT_PATH", "/chat/completions"),
+            timeout_seconds=_load_timeout("OPENROUTER_TIMEOUT_SECONDS", default=60.0),
+            stream=stream,
+            options=normalized_options,
+        )
 
+    if normalized_model == "local":
+        local_model = os.getenv("LOCAL_LLM_MODEL", "").strip()
+        if not local_model:
+            raise RuntimeError("LOCAL_LLM_MODEL is not set")
+        return LLMConfig(
+            api_key=os.getenv("LOCAL_LLM_API_KEY", "").strip(),
+            model=local_model,
+            base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8080"),
+            provider="LOCAL",
+            chat_path=os.getenv("LOCAL_LLM_CHAT_PATH", "/api/chat"),
+            timeout_seconds=_load_timeout("LOCAL_LLM_TIMEOUT_SECONDS", default=120.0),
+            stream=stream,
+            options=normalized_options,
+        )
 
-def _load_openrouter_config() -> LLMConfig:
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is not set")
-
-    return LLMConfig(
-        api_key=api_key,
-        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
-        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        provider="OPENROUTER",
-        chat_path=os.getenv("OPENROUTER_CHAT_PATH", "/chat/completions"),
-        timeout_seconds=_load_timeout("OPENROUTER_TIMEOUT_SECONDS", default=60.0),
-    )
-
-
-def _load_local_config() -> LLMConfig:
-    model = os.getenv("LOCAL_LLM_MODEL", "").strip()
-    if not model:
-        raise RuntimeError("LOCAL_LLM_MODEL is not set")
-
-    return LLMConfig(
-        api_key=os.getenv("LOCAL_LLM_API_KEY", "").strip(),
-        model=model,
-        base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8080"),
-        provider="LOCAL",
-        chat_path=os.getenv("LOCAL_LLM_CHAT_PATH", "/api/chat"),
-        timeout_seconds=_load_timeout("LOCAL_LLM_TIMEOUT_SECONDS", default=120.0),
-    )
+    raise RuntimeError("model must be 'openai/gpt-4o-mini' or 'local'")
 
 
 def chat_json(
@@ -75,8 +82,10 @@ def chat_json(
         f"{node_name} llm request",
         {
             "provider": config.provider,
+            "model": config.model,
             "base_url": config.base_url,
             "chat_path": config.chat_path,
+            "requested_stream": config.stream,
             "payload": payload,
         },
     )
@@ -139,21 +148,44 @@ def _build_payload(
     ]
 
     if config.provider == "OPENROUTER":
-        return {
+        payload: dict[str, Any] = {
             "model": config.model,
             "messages": messages,
             "response_format": {"type": "json_object"},
-            "temperature": 0.2,
+            "stream": False,
         }
+        openrouter_options = _openrouter_options(config.options)
+        if openrouter_options:
+            payload.update(openrouter_options)
+        else:
+            payload["temperature"] = 0.2
+        return payload
+
     if config.provider == "LOCAL":
+        local_options = dict(config.options)
+        if "temperature" not in local_options:
+            local_options["temperature"] = 0.2
         return {
             "model": config.model,
             "messages": messages,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.2},
+            "options": local_options,
         }
+
     raise RuntimeError(f"Unsupported LLM provider: {config.provider}")
+
+
+def _openrouter_options(options: dict[str, Any]) -> dict[str, Any]:
+    allowed = ("temperature", "top_p", "top_k", "repeat_penalty", "stop", "seed")
+    result = {
+        key: value
+        for key, value in options.items()
+        if key in allowed and value is not None
+    }
+    if "num_predict" in options and options["num_predict"] is not None:
+        result["max_tokens"] = options["num_predict"]
+    return result
 
 
 def _build_request(config: LLMConfig, payload: dict[str, Any]) -> urllib.request.Request:
@@ -163,7 +195,7 @@ def _build_request(config: LLMConfig, payload: dict[str, Any]) -> urllib.request
             {
                 "Authorization": f"Bearer {config.api_key}",
                 "HTTP-Referer": "https://local.synthetic-generator",
-                "X-Title": "synthetic_generator_with_ML",
+                "X-Title": "puml_gen",
             }
         )
     elif config.provider == "LOCAL" and config.api_key:
@@ -183,6 +215,16 @@ def _extract_response_content(config: LLMConfig, body: dict[str, Any]) -> str:
     if config.provider == "LOCAL":
         return str(body["message"]["content"])
     raise RuntimeError(f"Unsupported LLM provider: {config.provider}")
+
+
+def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
+    if not options:
+        return {}
+    return {
+        key: value
+        for key, value in options.items()
+        if value is not None
+    }
 
 
 def _load_timeout(env_name: str, *, default: float) -> float:
